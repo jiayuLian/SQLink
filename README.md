@@ -17,6 +17,17 @@
 
 ---
 
+## 推荐：从 Release 直接下载安装（最省事）
+每次构建成功都会自动发布一个 **Release**（已包含 `SQLink.ipa`）：
+1. 在 iPhone 的 **Safari** 打开 Release 页面：
+   `https://github.com/jiayuLian/SQLink/releases`
+2. 点击 `SQLink.ipa` 下载（需登录你的 GitHub 账号，因仓库为私有）。
+3. 下载完成后用系统分享 / 「用其他 App 打开」→ 选择 **TrollStore** 安装即可。
+
+> 想升级时，重新下载最新 Release 的 IPA，用 TrollStore 安装会覆盖旧版（连接数据在 Keychain，不会丢）。
+
+---
+
 ## 方式一：GitHub Actions 直接出 IPA（无需 Mac）
 1. 把这个 `SQLink` 目录推到你的 GitHub 仓库（已包含 `.github/workflows/build.yml`）。
 2. 仓库 → **Actions** → 选择 `Build IPA (TrollStore)` → **Run workflow**。
