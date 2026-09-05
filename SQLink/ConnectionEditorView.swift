@@ -70,7 +70,7 @@ struct ConnectionEditorView: View {
                     }.disabled(testing)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("保存") { save() }.bold()
+                    Button("保存") { save() }.fontWeight(.bold)
                 }
             }
             .onAppear {

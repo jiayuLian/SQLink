@@ -49,7 +49,7 @@ final class MySQLConnection {
 
     func listTables(db: String) async throws -> [(name: String, type: String)] {
         try await run {
-            let r = try self._query("SHOW FULL TABLES FROM `\(esc(db))`")
+            let r = try self._query("SHOW FULL TABLES FROM `\(self.esc(db))`")
             guard case .result(_, let rows) = r else { return [] }
             return rows.compactMap { row in
                 guard row.count >= 2, let n = row[0] else { return nil }
@@ -60,7 +60,7 @@ final class MySQLConnection {
 
     func listColumns(db: String, table: String) async throws -> [ColumnInfo] {
         try await run {
-            let r = try self._query("SHOW FULL COLUMNS FROM `\(esc(db))`.`\(esc(table))`")
+            let r = try self._query("SHOW FULL COLUMNS FROM `\(self.esc(db))`.`\(self.esc(table))`")
             guard case .result(_, let rows) = r else { return [] }
             return rows.map { row in
                 ColumnInfo(
@@ -76,7 +76,7 @@ final class MySQLConnection {
     }
 
     func preview(db: String, table: String, limit: Int = 100) async throws -> QueryResult {
-        try await run { try self._query("SELECT * FROM `\(esc(db))`.`\(esc(table))` LIMIT \(limit)") }
+        try await run { try self._query("SELECT * FROM `\(self.esc(db))`.`\(self.esc(table))` LIMIT \(limit)") }
     }
 
     func close() {
@@ -98,13 +98,14 @@ final class MySQLConnection {
         CFStreamCreatePairWithSocket(nil, fd, &readStream, &writeStream)
         guard let rs = readStream?.takeRetainedValue(),
               let ws = writeStream?.takeRetainedValue() else {
-            close(fd)
+            Darwin.close(fd)
             throw MySQLError.connectionFailed("无法创建网络流")
         }
-        let input = rs as! InputStream
-        let output = ws as! OutputStream
-        input.setProperty(kCFBooleanTrue, forKey: .shouldCloseNativeSocket)
-        output.setProperty(kCFBooleanTrue, forKey: .shouldCloseNativeSocket)
+        let input = rs as InputStream
+        let output = ws as OutputStream
+        let closeKey = Stream.PropertyKey(rawValue: kCFStreamPropertyShouldCloseNativeSocket as String)
+        input.setProperty(kCFBooleanTrue, forKey: closeKey)
+        output.setProperty(kCFBooleanTrue, forKey: closeKey)
         input.open()
         output.open()
         inputStream = input
@@ -135,8 +136,8 @@ final class MySQLConnection {
         while let c = cur {
             fd = socket(c.pointee.ai_family, c.pointee.ai_socktype, c.pointee.ai_protocol)
             if fd >= 0 {
-                if connect(fd, c.pointee.ai_addr, c.pointee.ai_addrlen) == 0 { break }
-                close(fd); fd = -1
+                if Darwin.connect(fd, c.pointee.ai_addr, c.pointee.ai_addrlen) == 0 { break }
+                Darwin.close(fd); fd = -1
             }
             cur = c.pointee.ai_next
         }
@@ -241,8 +242,8 @@ final class MySQLConnection {
 
     private func upgradeTLS(allowSelfSigned: Bool) throws {
         let sslSettings: [String: Any] = [
-            kCFStreamSSLValidatesCertificateChain as String: allowSelfSigned ? kCFBooleanFalse : kCFBooleanTrue,
-            kCFStreamSSLPeerName as String: kCFNull
+            kCFStreamSSLValidatesCertificateChain as String: (allowSelfSigned ? kCFBooleanFalse : kCFBooleanTrue) as Any,
+            kCFStreamSSLPeerName as String: kCFNull as Any
         ]
         let levelKey = Stream.PropertyKey(rawValue: kCFStreamPropertySocketSecurityLevel as String)
         let settingsKey = Stream.PropertyKey(rawValue: kCFStreamPropertySSLSettings as String)
