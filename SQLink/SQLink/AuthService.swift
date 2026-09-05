@@ -69,7 +69,14 @@ final class AuthService {
         }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(APIResponse<T>.self, from: data)
+        let resp = try decoder.decode(APIResponse<T>.self, from: data)
+        // token 失效（过期 / 被服务端拒绝）：清除本地登录态，回到登录页。
+        // 这样「90 天绝对上限」触发或 token 被吊销时，用户会被平滑引导重新登录，
+        // 而不是停留在「已登录但所有请求都 401」的卡死状态。
+        if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 401 {
+            await MainActor.run { AppSettings.shared.logout() }
+        }
+        return resp
     }
 
     private func require<T>(_ resp: APIResponse<T>, extract: (T) -> Bool) async throws {
