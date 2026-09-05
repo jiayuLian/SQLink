@@ -27,6 +27,9 @@ struct QueryConsoleView: View {
     @State private var showHistory = false
     @State private var history: [String] = []
 
+    // export
+    // （导出分享面板改为直接 present，不再用 @State + .sheet，避免首次弹出空白）
+
     private var currentDB: String? { db }
 
     // autocomplete
@@ -166,17 +169,7 @@ struct QueryConsoleView: View {
         }
         .navigationTitle("查询控制台")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("完成") { hideKeyboard() }
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button { history = QueryHistory.load(); showHistory = true } label: { Image(systemName: "clock") }
-            }
-        }
+        .toolbar { queryToolbar }
         .sheet(isPresented: $showHistory) {
             QueryHistorySheet(history: $history) { q in
                 sql = q
@@ -205,6 +198,46 @@ struct QueryConsoleView: View {
 
     private func loadContextColumns() {
         Task { await loadContextColumnsAsync() }
+    }
+
+    private func exportAs(_ format: ExportFormat) {
+        guard !columns.isEmpty else { return }
+        let names = columns.map { $0.name }
+        let ts = ExportUtils.timestamp()
+        let fileName: String
+        let content: String
+        switch format {
+        case .csv:
+            fileName = "query_result_\(ts).csv"
+            content = ExportUtils.buildCSV(columnNames: names, rows: rows)
+        case .sql:
+            fileName = "query_result_\(ts).sql"
+            content = ExportUtils.buildSQL(insertInto: "query_result", columnNames: names, rows: rows)
+        }
+        if let url = ExportUtils.writeTempFile(name: fileName, content: content) {
+            ExportUtils.shareFile(url)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var queryToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .keyboard) {
+            Spacer()
+            Button("完成") { hideKeyboard() }
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button { history = QueryHistory.load(); showHistory = true } label: { Image(systemName: "clock") }
+        }
+        // 导出为会员功能（PRO）。当前 isPro 默认 true，接入会员后按后端状态决定是否显示。
+        // 条件判断放在 ToolbarItem 内部（View 级别），避免在 ToolbarContent 顶层用 if（iOS 16 才支持）。
+        ToolbarItem(placement: .navigationBarTrailing) {
+            if AppConfig.isPro {
+                Menu {
+                    Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
+                    Button { exportAs(.sql) } label: { Label("导出 SQL", systemImage: "swiftdata") }
+                } label: { Label("导出", systemImage: "square.and.arrow.up") }
+            }
+        }
     }
 
     private func loadContextColumnsAsync() async {

@@ -419,6 +419,9 @@ struct TableDataView: View {
 
     @State private var showFilter = false
 
+    // export
+    // （导出分享面板改为直接 present，不再用 @State + .sheet，避免首次弹出空白）
+
     // inline edit
     @State private var editMode = false
     @State private var editingValues: [[String?]] = []
@@ -431,6 +434,27 @@ struct TableDataView: View {
     }
 
     var body: some View {
+        mainContent
+            .navigationTitle(table)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { dataToolbar }
+            .sheet(isPresented: $showFilter) {
+                TableFilterView(columns: columns,
+                                conditions: $conditions,
+                                sortField: $sortField,
+                                sortDirection: $sortDirection,
+                                filterLogic: $filterLogic,
+                                db: db, table: table, connection: connection,
+                                onApply: { w, o in
+                                    activeWhere = w; activeOrderBy = o
+                                })
+            }
+            .onChange(of: activeWhere) { _ in Task { await load() } }
+            .onChange(of: activeOrderBy) { _ in Task { await load() } }
+            .task { await load() }
+    }
+
+    private var mainContent: some View {
         Group {
             if loading {
                 ProgressView("加载中…")
@@ -478,27 +502,23 @@ struct TableDataView: View {
                 }
             }
         }
-        .navigationTitle(table)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button { showFilter = true } label: { Label("筛选", systemImage: "line.3.horizontal.decrease.circle") }
+    }
+
+    @ToolbarContentBuilder
+    private var dataToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button { showFilter = true } label: { Label("筛选", systemImage: "line.3.horizontal.decrease.circle") }
+        }
+        // 导出为会员功能（PRO）。当前 isPro 默认 true，接入会员后按后端状态决定是否显示。
+        // 注意：条件判断放在 ToolbarItem 内部（View 级别），避免在 ToolbarContent 顶层用 if（iOS 16 才支持）。
+        ToolbarItem(placement: .navigationBarTrailing) {
+            if AppConfig.isPro {
+                Menu {
+                    Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
+                    Button { exportAs(.sql) } label: { Label("导出 SQL", systemImage: "swiftdata") }
+                } label: { Label("导出", systemImage: "square.and.arrow.up") }
             }
         }
-        .sheet(isPresented: $showFilter) {
-            TableFilterView(columns: columns,
-                            conditions: $conditions,
-                            sortField: $sortField,
-                            sortDirection: $sortDirection,
-                            filterLogic: $filterLogic,
-                            db: db, table: table, connection: connection,
-                            onApply: { w, o in
-                                activeWhere = w; activeOrderBy = o
-                            })
-        }
-        .onChange(of: activeWhere) { _ in Task { await load() } }
-        .onChange(of: activeOrderBy) { _ in Task { await load() } }
-        .task { await load() }
     }
 
     private func load() async {
@@ -524,6 +544,25 @@ struct TableDataView: View {
             await MainActor.run { self.error = msg }
         }
         await MainActor.run { loading = false }
+    }
+
+    private func exportAs(_ format: ExportFormat) {
+        guard !previewCols.isEmpty else { return }
+        let names = previewCols.map { $0.name }
+        let ts = ExportUtils.timestamp()
+        let fileName: String
+        let content: String
+        switch format {
+        case .csv:
+            fileName = "\(table)_\(ts).csv"
+            content = ExportUtils.buildCSV(columnNames: names, rows: previewRows)
+        case .sql:
+            fileName = "\(table)_\(ts).sql"
+            content = ExportUtils.buildSQL(insertInto: table, columnNames: names, rows: previewRows)
+        }
+        if let url = ExportUtils.writeTempFile(name: fileName, content: content) {
+            ExportUtils.shareFile(url)
+        }
     }
 
     private func enterEdit() {

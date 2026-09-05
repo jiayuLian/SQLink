@@ -21,6 +21,7 @@ targets:
       - path: SQLink/TableDetailView.swift
       - path: SQLink/QueryConsoleView.swift
       - path: SQLink/Components.swift
+      - path: SQLink/ExportUtils.swift
       - path: SQLink/Assets.xcassets
     info:
       path: SQLink/Info.plist
