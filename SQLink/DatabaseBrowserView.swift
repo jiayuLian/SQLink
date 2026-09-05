@@ -133,7 +133,7 @@ struct TableDetailView: View {
                 ForEach(columns) { c in
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            Text(c.field).bold()
+                            Text(c.field).font(.system(size: 14, weight: .bold))
                             Spacer()
                             if !c.key.isEmpty && c.key != " " {
                                 Text(c.key).font(.caption).padding(.horizontal, 6)

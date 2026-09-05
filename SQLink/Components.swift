@@ -47,7 +47,7 @@ struct ResultGridView: View {
                     HStack(spacing: 0) {
                         ForEach(columns) { c in
                             Text(c.name)
-                                .font(.system(.subheadline, design: .monospaced).bold())
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .frame(minWidth: 120, alignment: .leading)
                                 .padding(6)
                                 .background(Color.gray.opacity(0.18))
