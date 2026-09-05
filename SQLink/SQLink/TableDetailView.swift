@@ -445,6 +445,10 @@ struct TableDataView: View {
 
     @State private var showFilter = false
 
+    // 数据表格双指缩放（0.6~3.0）；gridMagnify 为手势进行中的临时比例
+    @State private var gridScale: CGFloat = 1.0
+    @GestureState private var gridMagnify: CGFloat = 1.0
+
     // export
     // （导出分享面板改为直接 present，不再用 @State + .sheet，避免首次弹出空白）
 
@@ -526,11 +530,30 @@ struct TableDataView: View {
 
                     if editMode {
                         EditableGridView(columns: columns, rows: $editingValues,
-                                         originalRows: previewRows, onChange: { hasChanges = true })
+                                         originalRows: previewRows, scale: gridScale * gridMagnify,
+                                         onChange: { hasChanges = true })
                             .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                MagnificationGesture()
+                                    .updating($gridMagnify) { value, state, _ in state = value }
+                                    .onEnded { value in
+                                        gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                    }
+                            )
+                            .onTapGesture(count: 2) { gridScale = 1 }
                     } else {
-                        ResultGridView(columns: previewCols, rows: previewRows)
+                        ResultGridView(columns: previewCols, rows: previewRows, scale: gridScale * gridMagnify)
                             .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                MagnificationGesture()
+                                    .updating($gridMagnify) { value, state, _ in state = value }
+                                    .onEnded { value in
+                                        gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                    }
+                            )
+                            .onTapGesture(count: 2) { gridScale = 1 }
                     }
 
                     if let saveMessage = saveMessage {
@@ -556,6 +579,12 @@ struct TableDataView: View {
                         } } label: {
                             Label("\(settings.pageSize) 条/页", systemImage: "line.3.horizontal")
                                 .font(.caption)
+                        }
+                        if gridScale != 1 {
+                            Button { gridScale = 1 } label: {
+                                Label("\(Int(gridScale * 100))%", systemImage: "arrow.counterclockwise")
+                                    .font(.caption)
+                            }
                         }
                     }
                     .padding(.horizontal, 10).padding(.vertical, 8)
@@ -602,38 +631,51 @@ struct TableDataView: View {
         }
     }
 
+    /// 连接断开（写入数据失败 / 被服务器关闭）时自动重连一次再重试，避免「点击查看数据却报写入失败」。
+    private func withReconnect<T>(_ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch let e as MySQLError where e.isDeadConnection {
+            try await connection.reconnect()
+            return try await body()
+        }
+    }
+
     private func load() async {
         loading = true; error = nil
         do {
-            let pageSize = max(1, settings.pageSize)
-            // 先取真实总数，用于免费版浏览上限判断
-            let raw = try await connection.countRows(db: db, table: table, whereClause: activeWhere)
-            let viewLimit = settings.isPro ? Int.max : settings.plan.freeViewLimit
-            let displayTotal = min(raw, viewLimit)
-            let computedMaxPage = max(1, Int(ceil(Double(displayTotal) / Double(pageSize))))
-            let safePage = min(max(1, page), computedMaxPage)
-            if safePage != page { await MainActor.run { page = safePage } }
-            let offset = (safePage - 1) * pageSize
-
-            async let cols = connection.listColumns(db: db, table: table)
-            async let prev = connection.fetchRows(db: db, table: table, limit: pageSize, offset: offset,
-                                                 whereClause: activeWhere, orderBy: activeOrderBy)
-            let c = try await cols
-            let p = try await prev
-            var pc = [ColumnDef](); var pr = [[String?]]()
-            if case .result(let cc, let rr) = p { pc = cc; pr = rr }
-            await MainActor.run {
-                self.columns = c
-                self.previewCols = pc
-                self.previewRows = pr
-                self.rawCount = raw
-                self.rowCount = displayTotal
-            }
+            try await fetchData()
         } catch {
-            let msg = error.localizedDescription
-            await MainActor.run { self.error = msg }
+            await MainActor.run { self.error = error.localizedDescription }
         }
         await MainActor.run { loading = false }
+    }
+
+    private func fetchData() async throws {
+        let pageSize = max(1, settings.pageSize)
+        // 先取真实总数，用于免费版浏览上限判断
+        let raw = try await withReconnect { try await connection.countRows(db: db, table: table, whereClause: activeWhere) }
+        let viewLimit = settings.isPro ? Int.max : settings.plan.freeViewLimit
+        let displayTotal = min(raw, viewLimit)
+        let computedMaxPage = max(1, Int(ceil(Double(displayTotal) / Double(pageSize))))
+        let safePage = min(max(1, page), computedMaxPage)
+        if safePage != page { await MainActor.run { page = safePage } }
+        let offset = (safePage - 1) * pageSize
+
+        async let cols = withReconnect { try await connection.listColumns(db: db, table: table) }
+        async let prev = withReconnect { try await connection.fetchRows(db: db, table: table, limit: pageSize, offset: offset,
+                                                 whereClause: activeWhere, orderBy: activeOrderBy) }
+        let c = try await cols
+        let p = try await prev
+        var pc = [ColumnDef](); var pr = [[String?]]()
+        if case .result(let cc, let rr) = p { pc = cc; pr = rr }
+        await MainActor.run {
+            self.columns = c
+            self.previewCols = pc
+            self.previewRows = pr
+            self.rawCount = raw
+            self.rowCount = displayTotal
+        }
     }
 
     private func exportAs(_ format: ExportFormat) {
@@ -709,7 +751,7 @@ struct TableDataView: View {
                 guard !sets.isEmpty else { continue }
                 let pkVal = quoteValue(previewRows[ri][pkIndex] ?? "")
                 let sql = "UPDATE `\(db.replacingOccurrences(of: "`", with: "``"))`.`\(table.replacingOccurrences(of: "`", with: "``"))` SET \(sets.joined(separator: ", ")) WHERE `\(pk.replacingOccurrences(of: "`", with: "``"))` = \(pkVal) LIMIT 1"
-                _ = try await connection.query(sql)
+                _ = try await withReconnect { try await connection.query(sql) }
             }
             await MainActor.run {
                 saveMessage = "保存成功"

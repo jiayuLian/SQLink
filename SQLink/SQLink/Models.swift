@@ -23,6 +23,14 @@ enum MySQLError: Error, LocalizedError {
         case .protocolError(let m): return "协议错误：\(m)"
         }
     }
+
+    /// 连接已断开（socket 写失败 / 被服务器关闭），可尝试自动重连。
+    var isDeadConnection: Bool {
+        switch self {
+        case .writeError, .connectionClosed: return true
+        default: return false
+        }
+    }
 }
 
 // MARK: - Connection profile (password lives in Keychain, never here)
