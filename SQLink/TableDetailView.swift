@@ -410,12 +410,20 @@ struct TableDataView: View {
     @Binding var activeWhere: String?
     @Binding var activeOrderBy: String?
 
+    @EnvironmentObject var settings: AppSettings
+
     @State private var columns: [ColumnInfo] = []
     @State private var previewCols: [ColumnDef] = []
     @State private var previewRows: [[String?]] = []
     @State private var rowCount: Int? = nil
+    @State private var rawCount: Int = 0
     @State private var loading = true
     @State private var error: String?
+    @State private var page = 1
+    @State private var exportError: String?
+
+    // 导出进度（引用类型，便于后台 Task 安全更新 UI）
+    @StateObject private var exportState = ExportProgressModel()
 
     @State private var showFilter = false
 
@@ -449,8 +457,8 @@ struct TableDataView: View {
                                     activeWhere = w; activeOrderBy = o
                                 })
             }
-            .onChange(of: activeWhere) { _ in Task { await load() } }
-            .onChange(of: activeOrderBy) { _ in Task { await load() } }
+            .onChange(of: activeWhere) { _ in page = 1; Task { await load() } }
+            .onChange(of: activeOrderBy) { _ in page = 1; Task { await load() } }
             .task { await load() }
     }
 
@@ -464,7 +472,7 @@ struct TableDataView: View {
                 VStack(spacing: 0) {
                     HStack {
                         if let n = rowCount {
-                            Text("匹配 \(n) 条，已显示前 \(previewRows.count) 条")
+                            Text("共 \(n) 条 · 第 \(page)/\(maxPage) 页")
                                 .font(.caption).foregroundColor(.secondary)
                         }
                         Spacer()
@@ -472,7 +480,7 @@ struct TableDataView: View {
                             Button("取消") { cancelEdit() }.font(.caption)
                             Button { Task { await saveEdits() } } label: { Label("保存", systemImage: "checkmark") }
                                 .disabled(primaryKey == nil || !hasChanges)
-                        } else {
+                        } else if settings.isPro && hasFilterCondition {
                             Button { enterEdit() } label: { Label("编辑", systemImage: "square.and.pencil") }
                             if primaryKey == nil {
                                 Text("⚠ 无主键/唯一键，不可保存").font(.caption2).foregroundColor(.orange).lineLimit(1)
@@ -481,6 +489,17 @@ struct TableDataView: View {
                     }
                     .padding(.horizontal, 10).padding(.vertical, 6)
                     .background(Color.gray.opacity(0.06))
+
+                    // 免费版浏览上限提示
+                    if isViewLimited {
+                        HStack(spacing: 4) {
+                            Image(systemName: "lock.fill").font(.caption2)
+                            Text("免费版最多查看 \(settings.plan.freeViewLimit) 条，共 \(rawCount) 条已隐藏，升级会员查看全部")
+                                .font(.caption2)
+                        }
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 10).padding(.bottom, 4)
+                    }
 
                     if editMode {
                         EditableGridView(columns: columns, rows: $editingValues,
@@ -499,8 +518,50 @@ struct TableDataView: View {
                         Text(saveError).font(.footnote).foregroundColor(.red)
                             .padding(.horizontal, 10).padding(.bottom, 4)
                     }
+
+                    // 分页控件
+                    Divider()
+                    HStack(spacing: 12) {
+                        Button { if page > 1 { page -= 1 } } label: { Label("上一页", systemImage: "chevron.left") }
+                            .disabled(page <= 1 || loading)
+                        Text("\(page) / \(maxPage)").font(.caption)
+                        Button { if page < maxPage { page += 1 } } label: { Label("下一页", systemImage: "chevron.right") }
+                            .disabled(page >= maxPage || loading)
+                        Spacer()
+                        Menu { ForEach([50, 100, 200, 500], id: \.self) { s in
+                            Button("\(s) 条/页") { settings.pageSize = s; page = 1 }
+                        } } label: {
+                            Label("\(settings.pageSize) 条/页", systemImage: "line.3.horizontal")
+                                .font(.caption)
+                        }
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(Color.gray.opacity(0.04))
                 }
+                // 导出进度遮罩
+                .overlay { if exportState.isExporting { exportOverlay } }
             }
+        }
+    }
+
+    private var maxPage: Int {
+        let ps = max(1, settings.pageSize)
+        return max(1, Int(ceil(Double(rowCount ?? 0) / Double(ps))))
+    }
+    private var isViewLimited: Bool {
+        !settings.isPro && rawCount > settings.plan.freeViewLimit
+    }
+    private var exportOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView(value: exportState.progress) { Text("导出中…").foregroundColor(.white) }
+                    .progressViewStyle(LinearProgressViewStyle(tint: .white))
+                    .frame(width: 200)
+                if let m = exportState.message { Text(m).font(.caption).foregroundColor(.white) }
+            }
+            .padding(24)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemBackground)))
         }
     }
 
@@ -509,35 +570,41 @@ struct TableDataView: View {
         ToolbarItem(placement: .navigationBarTrailing) {
             Button { showFilter = true } label: { Label("筛选", systemImage: "line.3.horizontal.decrease.circle") }
         }
-        // 导出为会员功能（PRO）。当前 isPro 默认 true，接入会员后按后端状态决定是否显示。
-        // 注意：条件判断放在 ToolbarItem 内部（View 级别），避免在 ToolbarContent 顶层用 if（iOS 16 才支持）。
+        // 导出：所有用户可用；免费版按免费额度限制行数，会员无限制。
         ToolbarItem(placement: .navigationBarTrailing) {
-            if AppConfig.isPro {
-                Menu {
-                    Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
-                    Button { exportAs(.sql) } label: { Label("导出 SQL", systemImage: "swiftdata") }
-                } label: { Label("导出", systemImage: "square.and.arrow.up") }
-            }
+            Menu {
+                Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
+                Button { exportAs(.sql) } label: { Label("导出 SQL", systemImage: "swiftdata") }
+            } label: { Label("导出", systemImage: "square.and.arrow.up") }
         }
     }
 
     private func load() async {
         loading = true; error = nil
         do {
+            let pageSize = max(1, settings.pageSize)
+            // 先取真实总数，用于免费版浏览上限判断
+            let raw = try await connection.countRows(db: db, table: table, whereClause: activeWhere)
+            let viewLimit = settings.isPro ? Int.max : settings.plan.freeViewLimit
+            let displayTotal = min(raw, viewLimit)
+            let computedMaxPage = max(1, Int(ceil(Double(displayTotal) / Double(pageSize))))
+            let safePage = min(max(1, page), computedMaxPage)
+            if safePage != page { await MainActor.run { page = safePage } }
+            let offset = (safePage - 1) * pageSize
+
             async let cols = connection.listColumns(db: db, table: table)
-            async let prev = connection.preview(db: db, table: table, limit: 100,
+            async let prev = connection.fetchRows(db: db, table: table, limit: pageSize, offset: offset,
                                                  whereClause: activeWhere, orderBy: activeOrderBy)
-            async let cnt = connection.countRows(db: db, table: table, whereClause: activeWhere)
             let c = try await cols
             let p = try await prev
-            let n = try await cnt
             var pc = [ColumnDef](); var pr = [[String?]]()
             if case .result(let cc, let rr) = p { pc = cc; pr = rr }
             await MainActor.run {
                 self.columns = c
                 self.previewCols = pc
                 self.previewRows = pr
-                self.rowCount = n
+                self.rawCount = raw
+                self.rowCount = displayTotal
             }
         } catch {
             let msg = error.localizedDescription
@@ -547,21 +614,34 @@ struct TableDataView: View {
     }
 
     private func exportAs(_ format: ExportFormat) {
-        guard !previewCols.isEmpty else { return }
-        let names = previewCols.map { $0.name }
-        let ts = ExportUtils.timestamp()
-        let fileName: String
-        let content: String
-        switch format {
-        case .csv:
-            fileName = "\(table)_\(ts).csv"
-            content = ExportUtils.buildCSV(columnNames: names, rows: previewRows)
-        case .sql:
-            fileName = "\(table)_\(ts).sql"
-            content = ExportUtils.buildSQL(insertInto: table, columnNames: names, rows: previewRows)
-        }
-        if let url = ExportUtils.writeTempFile(name: fileName, content: content) {
-            ExportUtils.shareFile(url)
+        guard !exportState.isExporting else { return }
+        // 免费版限制导出行数；会员无限制。
+        let maxRows = settings.isPro ? nil : settings.plan.freeExportLimit
+        exportState.isExporting = true
+        exportState.progress = 0
+        exportState.message = "准备中…"
+        Task.detached(priority: .userInitiated) { [connection, db, table, activeWhere, activeOrderBy, state = exportState] in
+            do {
+                let url = try await ExportUtils.exportTableStreaming(
+                    connection: connection, db: db, table: table,
+                    whereClause: activeWhere, orderBy: activeOrderBy,
+                    format: format, maxRows: maxRows, chunkSize: 500
+                ) { progress, count in
+                    Task { @MainActor in
+                        state.progress = progress
+                        state.message = "已导出 \(count) 行"
+                    }
+                }
+                await MainActor.run {
+                    state.isExporting = false
+                    ExportUtils.shareFile(url)
+                }
+            } catch {
+                await MainActor.run {
+                    state.isExporting = false
+                    state.message = "导出失败：\(error.localizedDescription)"
+                }
+            }
         }
     }
 

@@ -20,6 +20,9 @@ targets:
       - path: SQLink/DatabaseBrowserView.swift
       - path: SQLink/TableDetailView.swift
       - path: SQLink/QueryConsoleView.swift
+      - path: SQLink/ProfileView.swift
+      - path: SQLink/AuthService.swift
+      - path: SQLink/AuthView.swift
       - path: SQLink/Components.swift
       - path: SQLink/ExportUtils.swift
       - path: SQLink/Assets.xcassets

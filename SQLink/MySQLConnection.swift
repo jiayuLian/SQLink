@@ -89,15 +89,36 @@ final class MySQLConnection {
         }
     }
 
-    func preview(db: String, table: String, limit: Int = 100,
-                 whereClause: String? = nil, orderBy: String? = nil) async throws -> QueryResult {
+    /// 分页拉取数据。limit/offset 支持翻页。
+    func fetchRows(db: String, table: String, limit: Int = 100, offset: Int = 0,
+                   whereClause: String? = nil, orderBy: String? = nil) async throws -> QueryResult {
         try await run {
             var sql = "SELECT * FROM `\(self.esc(db))`.`\(self.esc(table))`"
             if let w = whereClause, !w.isEmpty { sql += " WHERE \(w)" }
             if let o = orderBy, !o.isEmpty { sql += " ORDER BY \(o)" }
-            sql += " LIMIT \(limit)"
+            sql += " LIMIT \(limit) OFFSET \(offset)"
             return try self._query(sql)
         }
+    }
+
+    /// 拉取「全部匹配」的数据（自动按块分页累加，直到取完），用于导出全量。
+    /// 不受单页 maxRows 限制。
+    func fetchAllRows(db: String, table: String, whereClause: String? = nil,
+                     orderBy: String? = nil, chunk: Int = 500) async throws -> (columns: [ColumnDef], rows: [[String?]]) {
+        let total = try await countRows(db: db, table: table, whereClause: whereClause)
+        var allRows: [[String?]] = []
+        var columns: [ColumnDef] = []
+        var offset = 0
+        while offset < total {
+            let r = try await fetchRows(db: db, table: table, limit: chunk, offset: offset,
+                                        whereClause: whereClause, orderBy: orderBy)
+            guard case .result(let c, let rows) = r else { break }
+            if columns.isEmpty { columns = c }
+            allRows.append(contentsOf: rows)
+            if rows.isEmpty { break }
+            offset += rows.count
+        }
+        return (columns, allRows)
     }
 
     func distinctValues(db: String, table: String, column: String, limit: Int = 100) async throws -> [String] {

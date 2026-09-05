@@ -170,3 +170,122 @@ enum MySQLDataType {
         }
     }
 }
+
+// MARK: - App-wide settings (persisted in UserDefaults)
+enum ThemeMode: Int, CaseIterable, Identifiable, Codable {
+    case light = 0
+    case dark = 1
+    var id: Int { rawValue }
+    var label: String { self == .light ? "浅色" : "深色" }
+}
+
+/// 全局设置：主题、自动保存 SQL、默认每页条数、会员状态、账号。
+/// 用 @Published + 手动落盘 UserDefaults，避免在 ObservableObject 内使用 @AppStorage
+/// 不触发 objectWillChange 的经典坑。
+final class AppSettings: ObservableObject {
+    @Published var theme: ThemeMode {
+        didSet { UserDefaults.standard.set(theme.rawValue, forKey: "sqlink.theme") }
+    }
+    @Published var autoSaveSQL: Bool {
+        didSet { UserDefaults.standard.set(autoSaveSQL, forKey: "sqlink.autoSaveSQL") }
+    }
+    @Published var pageSize: Int {
+        didSet { UserDefaults.standard.set(pageSize, forKey: "sqlink.pageSize") }
+    }
+    @Published var isPro: Bool {
+        didSet { UserDefaults.standard.set(isPro, forKey: "sqlink.isPro") }
+    }
+    @Published var apiBaseURL: String {
+        didSet { UserDefaults.standard.set(apiBaseURL, forKey: "sqlink.apiBaseURL") }
+    }
+    @Published var authToken: String {
+        didSet { UserDefaults.standard.set(authToken, forKey: "sqlink.authToken") }
+    }
+    @Published var authEmail: String {
+        didSet { UserDefaults.standard.set(authEmail, forKey: "sqlink.authEmail") }
+    }
+    @Published var avatarURL: String {
+        didSet { UserDefaults.standard.set(avatarURL, forKey: "sqlink.avatarURL") }
+    }
+    @Published var guestMode: Bool {
+        didSet { UserDefaults.standard.set(guestMode, forKey: "sqlink.guestMode") }
+    }
+    /// 公共配置：免费额度 + 会员价格。由后端 /api/public/config 返回，本地缓存。
+    @Published var plan: PlanConfig {
+        didSet {
+            if let d = try? JSONEncoder().encode(plan) {
+                UserDefaults.standard.set(d, forKey: "sqlink.plan")
+            }
+        }
+    }
+
+    init() {
+        let d = UserDefaults.standard
+        self.theme = ThemeMode(rawValue: d.integer(forKey: "sqlink.theme")) ?? .light
+        self.autoSaveSQL = (d.object(forKey: "sqlink.autoSaveSQL") as? Bool) ?? true
+        self.pageSize = (d.object(forKey: "sqlink.pageSize") as? Int) ?? 100
+        self.isPro = (d.object(forKey: "sqlink.isPro") as? Bool) ?? false
+        self.apiBaseURL = d.string(forKey: "sqlink.apiBaseURL") ?? "https://sqlink-api.cute6696.cn"
+        self.authToken = d.string(forKey: "sqlink.authToken") ?? ""
+        self.authEmail = d.string(forKey: "sqlink.authEmail") ?? ""
+        self.avatarURL = d.string(forKey: "sqlink.avatarURL") ?? ""
+        self.guestMode = (d.object(forKey: "sqlink.guestMode") as? Bool) ?? false
+        if let pd = d.data(forKey: "sqlink.plan"),
+           let p = try? JSONDecoder().decode(PlanConfig.self, from: pd) {
+            self.plan = p
+        } else {
+            self.plan = .default
+        }
+    }
+
+    var isLoggedIn: Bool { !authToken.isEmpty || guestMode }
+
+    func logout() {
+        authToken = ""
+        authEmail = ""
+        avatarURL = ""
+        guestMode = false
+        isPro = false
+    }
+
+    func enterGuestMode() {
+        guestMode = true
+        authToken = ""
+        authEmail = ""
+        isPro = false
+    }
+
+    func applyMembership(_ email: String, token: String, isPro: Bool) {
+        self.authEmail = email
+        self.authToken = token
+        self.guestMode = false
+        self.isPro = isPro
+    }
+
+    /// 拉取后端公共配置（免费额度 + 价格），失败则保留本地缓存。
+    func refreshPlan() async {
+        do {
+            let p = try await AuthService.shared.fetchPublicConfig(baseURL: apiBaseURL)
+            await MainActor.run { self.plan = p }
+        } catch {
+            print("刷新公共配置失败：\(error.localizedDescription)")
+        }
+    }
+}
+
+/// 后端返回的公开配置（字段与 /api/public/config 的 snake_case 对应）。
+struct PlanConfig: Codable {
+    var freeExportLimit: Int
+    var freeViewLimit: Int
+    var proPriceYearly: Int
+    var proPriceLifetime: Int
+    var currency: String
+
+    static let `default` = PlanConfig(
+        freeExportLimit: 100,
+        freeViewLimit: 100,
+        proPriceYearly: 68,
+        proPriceLifetime: 98,
+        currency: "¥"
+    )
+}

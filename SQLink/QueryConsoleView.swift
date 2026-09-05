@@ -12,6 +12,8 @@ struct QueryConsoleView: View {
     let db: String?
     let defaultTable: String?
 
+    @EnvironmentObject var settings: AppSettings
+
     @State private var sql = ""
     @State private var columns: [ColumnDef] = []
     @State private var rows: [[String?]] = []
@@ -27,10 +29,25 @@ struct QueryConsoleView: View {
     @State private var showHistory = false
     @State private var history: [String] = []
 
-    // export
-    // （导出分享面板改为直接 present，不再用 @State + .sheet，避免首次弹出空白）
+    // edit-from-result
+    @State private var canEdit = false
+    @State private var editMode = false
+    @State private var editTable = ""
+    @State private var editDB = ""
+    @State private var editColumns: [ColumnInfo] = []
+    @State private var editPK: String? = nil
+    @State private var editPKIndex: Int? = nil
+    @State private var editingRows: [[String?]] = []
+    @State private var hasChanges = false
+    @State private var editMessage: String? = nil
+    @State private var editError: String? = nil
+
+    @State private var lastExecutedSQL: String? = nil
 
     private var currentDB: String? { db }
+
+    /// 按「数据库 + 表」分别记忆上次输入的 SQL（自动保存开关控制）。
+    private var sqlKey: String { "sqlink.sql.\(db ?? "_").\(defaultTable ?? "_")" }
 
     // autocomplete
     private let keywords = [
@@ -108,7 +125,7 @@ struct QueryConsoleView: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
                 .padding(8)
 
-            // autocomplete chips (separated from the run button by a divider)
+            // autocomplete chips
             if !suggestions.isEmpty {
                 Divider()
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -129,7 +146,7 @@ struct QueryConsoleView: View {
                 .padding(.bottom, 2)
             }
 
-            // run / message toolbar
+            // run / edit / message toolbar
             Divider()
             HStack {
                 Button { Task { await run() } } label: {
@@ -137,6 +154,16 @@ struct QueryConsoleView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(running)
+                if canEdit {
+                    Spacer().frame(width: 8)
+                    if editMode {
+                        Button { cancelConsoleEdit() } label: { Label("取消", systemImage: "xmark") }
+                        Button { Task { await saveConsoleEdits() } } label: { Label("保存", systemImage: "checkmark") }
+                            .disabled(!hasChanges)
+                    } else {
+                        Button { enterConsoleEdit() } label: { Label("编辑", systemImage: "square.and.pencil") }
+                    }
+                }
                 Spacer()
                 if let message = message {
                     Text(message).font(.footnote).foregroundColor(message.contains("成功") || message.contains("返回") ? .primary : .red)
@@ -144,6 +171,10 @@ struct QueryConsoleView: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 6)
+
+            if let editMessage = editMessage {
+                Text(editMessage).font(.footnote).foregroundColor(.green).padding(.horizontal, 12).padding(.top, 2)
+            }
 
             Divider().padding(.vertical, 6)
 
@@ -154,6 +185,11 @@ struct QueryConsoleView: View {
                         Color.clear.frame(height: 0).id("resultTop")
                         if columns.isEmpty && rows.isEmpty {
                             Text("运行 SQL 后在此显示结果").foregroundColor(.secondary).padding(.top, 40)
+                        } else if editMode {
+                            EditableGridView(columns: editColumns, rows: $editingRows,
+                                             originalRows: rows, onChange: { hasChanges = true })
+                                .frame(height: 320)
+                                .padding(.horizontal, 8)
                         } else {
                             ResultGridView(columns: columns, rows: rows)
                                 .frame(height: 320)
@@ -176,6 +212,17 @@ struct QueryConsoleView: View {
                 showHistory = false
             }
         }
+        .onAppear {
+            if settings.autoSaveSQL {
+                let saved = UserDefaults.standard.string(forKey: sqlKey) ?? ""
+                if !saved.isEmpty { sql = saved }
+            }
+        }
+        .onDisappear {
+            if settings.autoSaveSQL {
+                UserDefaults.standard.set(sql, forKey: sqlKey)
+            }
+        }
         .task(id: db) {
             if let db = db {
                 await loadTables(db: db)
@@ -185,6 +232,9 @@ struct QueryConsoleView: View {
                 }
             }
         }
+        .alert("提示", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) {
+            Button("确定") { editError = nil }
+        } message: { Text(editError ?? "") }
     }
 
     private func loadTables(db: String) async {
@@ -202,6 +252,8 @@ struct QueryConsoleView: View {
 
     private func exportAs(_ format: ExportFormat) {
         guard !columns.isEmpty else { return }
+        // 免费版限制导出行数；会员无限制。
+        let rowsToExport = settings.isPro ? rows : Array(rows.prefix(settings.plan.freeExportLimit))
         let names = columns.map { $0.name }
         let ts = ExportUtils.timestamp()
         let fileName: String
@@ -209,10 +261,10 @@ struct QueryConsoleView: View {
         switch format {
         case .csv:
             fileName = "query_result_\(ts).csv"
-            content = ExportUtils.buildCSV(columnNames: names, rows: rows)
+            content = ExportUtils.buildCSV(columnNames: names, rows: rowsToExport)
         case .sql:
             fileName = "query_result_\(ts).sql"
-            content = ExportUtils.buildSQL(insertInto: "query_result", columnNames: names, rows: rows)
+            content = ExportUtils.buildSQL(insertInto: "query_result", columnNames: names, rows: rowsToExport)
         }
         if let url = ExportUtils.writeTempFile(name: fileName, content: content) {
             ExportUtils.shareFile(url)
@@ -228,15 +280,12 @@ struct QueryConsoleView: View {
         ToolbarItem(placement: .navigationBarTrailing) {
             Button { history = QueryHistory.load(); showHistory = true } label: { Image(systemName: "clock") }
         }
-        // 导出为会员功能（PRO）。当前 isPro 默认 true，接入会员后按后端状态决定是否显示。
-        // 条件判断放在 ToolbarItem 内部（View 级别），避免在 ToolbarContent 顶层用 if（iOS 16 才支持）。
+        // 导出：所有用户可用；免费版按免费额度限制行数，会员无限制。
         ToolbarItem(placement: .navigationBarTrailing) {
-            if AppConfig.isPro {
-                Menu {
-                    Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
-                    Button { exportAs(.sql) } label: { Label("导出 SQL", systemImage: "swiftdata") }
-                } label: { Label("导出", systemImage: "square.and.arrow.up") }
-            }
+            Menu {
+                Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
+                Button { exportAs(.sql) } label: { Label("导出 SQL", systemImage: "swiftdata") }
+            } label: { Label("导出", systemImage: "square.and.arrow.up") }
         }
     }
 
@@ -253,8 +302,7 @@ struct QueryConsoleView: View {
         }
     }
 
-    /// Replaces only the current word (text after the last whitespace) with the
-    /// suggestion, preserving everything else — so `SELECT * f` -> `SELECT * FROM `.
+    /// Replaces only the current word with the suggestion.
     private func applySuggestion(_ suggestion: String) {
         let trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -281,11 +329,12 @@ struct QueryConsoleView: View {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         guard !stmts.isEmpty else {
-            await MainActor.run { message = "请输入 SQL" }
-            await MainActor.run { running = false }
+            await MainActor.run { message = "请输入 SQL"; running = false }
             return
         }
         QueryHistory.add(sql)
+        // 单条 SELECT 才尝试判定「可编辑」
+        let single = stmts.count == 1 ? String(stmts[0]) : nil
         do {
             var lastCols: [ColumnDef] = []
             var lastRows: [[String?]] = []
@@ -304,12 +353,143 @@ struct QueryConsoleView: View {
                 self.columns = lastCols
                 self.rows = lastRows
                 self.message = msg
+                self.lastExecutedSQL = single
+                self.editMode = false
+                self.editingRows = []
+                self.editMessage = nil
+            }
+            if let s = single, !lastCols.isEmpty {
+                await tryDetectEditable(sql: s)
+            } else {
+                await MainActor.run { self.canEdit = false }
             }
         } catch {
             let msg = "错误：\(error.localizedDescription)"
-            await MainActor.run { self.message = msg }
+            await MainActor.run { self.message = msg; self.canEdit = false }
         }
         await MainActor.run { running = false }
+    }
+
+    // MARK: - Edit from result (single-table simple SELECT only)
+
+    private func enterConsoleEdit() {
+        editingRows = rows.map { $0.map { $0 } }
+        hasChanges = false
+        editMessage = nil; editError = nil
+        editMode = true
+    }
+
+    private func cancelConsoleEdit() {
+        editMode = false
+        editingRows = []
+        hasChanges = false
+        editMessage = nil; editError = nil
+    }
+
+    private func saveConsoleEdits() async {
+        guard let pk = editPK, let pkIndex = editPKIndex else {
+            await MainActor.run { editError = "未检测到主键或唯一键" }
+            return
+        }
+        do {
+            for ri in 0..<editingRows.count {
+                var sets: [String] = []
+                for ci in 0..<editColumns.count {
+                    let old = rows[ri][ci]
+                    let new = editingRows[ri][ci]
+                    if old != new {
+                        let col = "`\(editColumns[ci].field.replacingOccurrences(of: "`", with: "``"))`"
+                        if let v = new {
+                            sets.append("\(col) = \(quoteVal(v))")
+                        } else {
+                            sets.append("\(col) = NULL")
+                        }
+                    }
+                }
+                guard !sets.isEmpty else { continue }
+                let pkVal = quoteVal(rows[ri][pkIndex] ?? "")
+                let sqlUpd = "UPDATE `\(editDB.replacingOccurrences(of: "`", with: "``"))`.`\(editTable.replacingOccurrences(of: "`", with: "``"))` SET \(sets.joined(separator: ", ")) WHERE `\(pk.replacingOccurrences(of: "`", with: "``"))` = \(pkVal) LIMIT 1"
+                _ = try await connection.query(sqlUpd)
+            }
+            await MainActor.run {
+                editMessage = "保存成功"
+                editError = nil
+                editMode = false
+                rows = editingRows
+            }
+        } catch {
+            await MainActor.run { editError = "保存失败：\(error.localizedDescription)" }
+        }
+    }
+
+    private func quoteVal(_ v: String) -> String {
+        "'" + v.replacingOccurrences(of: "'", with: "''") + "'"
+    }
+
+    /// 检测当前查询结果是否来自「单表简单 SELECT」，以便开启内联编辑。
+    private func tryDetectEditable(sql raw: String) async {
+        let sql = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forbidden = "(?i)\\b(join|union|group\\s+by|having|limit|offset|into|update|delete|insert|replace)\\b"
+        guard sql.range(of: forbidden, options: .regularExpression) == nil else {
+            await MainActor.run { canEdit = false }; return
+        }
+        guard sql.lowercased().hasPrefix("select") else {
+            await MainActor.run { canEdit = false }; return
+        }
+        guard let fromRange = sql.range(of: "(?i)\\bfrom\\b", options: .regularExpression) else {
+            await MainActor.run { canEdit = false }; return
+        }
+        var rest = String(sql[fromRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        var tableName: String
+        if rest.hasPrefix("`") {
+            if let end = rest.dropFirst().firstIndex(of: "`") {
+                tableName = String(rest[rest.index(after: rest.startIndex)..<end])
+                rest = String(rest[rest.index(after: end)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else { await MainActor.run { canEdit = false }; return }
+        } else {
+            let parts = rest.split(separator: " ", maxSplits: 1)
+            tableName = String(parts.first ?? "")
+            rest = parts.count > 1 ? String(parts[1]) : ""
+        }
+        if tableName.isEmpty { await MainActor.run { canEdit = false }; return }
+        let restTrim = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+        if restTrim.hasPrefix(",") || restTrim.contains(" join ") {
+            await MainActor.run { canEdit = false }; return
+        }
+        var useDB = db ?? ""
+        if tableName.contains(".") {
+            let comps = tableName.components(separatedBy: ".")
+            if comps.count == 2 {
+                useDB = comps[0].replacingOccurrences(of: "`", with: "")
+                tableName = comps[1].replacingOccurrences(of: "`", with: "")
+            }
+        }
+        guard !useDB.isEmpty else { await MainActor.run { canEdit = false }; return }
+        do {
+            let cols = try await connection.listColumns(db: useDB, table: tableName)
+            guard !cols.isEmpty else { await MainActor.run { canEdit = false }; return }
+            let pk = cols.first { $0.key == "PRI" }?.field ?? cols.first { $0.key == "UNI" }?.field
+            guard let pk = pk else { await MainActor.run { canEdit = false }; return }
+            let fieldSet = Set(cols.map { $0.field.lowercased() })
+            let resultNames = columns.map { $0.name.lowercased() }
+            guard resultNames.allSatisfy({ fieldSet.contains($0) }) else {
+                await MainActor.run { canEdit = false }; return
+            }
+            let editCols = columns.compactMap { cn in cols.first { $0.field.lowercased() == cn.name.lowercased() } }
+            guard editCols.count == columns.count else { await MainActor.run { canEdit = false }; return }
+            let sqlHasWhere = sql.lowercased().range(of: "(?i)\\bwhere\\b", options: .regularExpression) != nil
+            await MainActor.run {
+                self.editTable = tableName
+                self.editDB = useDB
+                self.editColumns = editCols
+                self.editPK = pk
+                self.editPKIndex = editCols.firstIndex { $0.field == pk }
+                // 数据编辑：必须是会员，且查询须带 WHERE 条件（整表 SELECT 不可编辑）
+                self.canEdit = settings.isPro && sqlHasWhere
+            }
+        } catch {
+            await MainActor.run { canEdit = false }
+        }
     }
 }
 
