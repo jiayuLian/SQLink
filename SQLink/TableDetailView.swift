@@ -441,6 +441,11 @@ struct TableDataView: View {
         columns.first { $0.key == "PRI" }?.field ?? columns.first { $0.key == "UNI" }?.field
     }
 
+    /// 是否已应用筛选条件（带 WHERE）。整表裸查为 false，不显示编辑按钮。
+    private var hasFilterCondition: Bool {
+        !(activeWhere?.isEmpty ?? true)
+    }
+
     var body: some View {
         mainContent
             .navigationTitle(table)

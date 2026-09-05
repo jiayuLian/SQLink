@@ -253,10 +253,10 @@ struct ImagePicker: UIViewControllerRepresentable {
 }
 
 extension UIImage {
-    func resized(toMax max: CGFloat) -> UIImage? {
-        let longest = max(size.width, size.height)
-        guard longest > max else { return self }
-        let scale = max / longest
+    func resized(toMax maxDimension: CGFloat) -> UIImage? {
+        let longest = Swift.max(size.width, size.height)
+        guard longest > maxDimension else { return self }
+        let scale = maxDimension / longest
         let newSize = CGSize(width: size.width * scale, height: size.height * scale)
         UIGraphicsBeginImageContextWithOptions(newSize, false, 0)
         draw(in: CGRect(origin: .zero, size: newSize))
