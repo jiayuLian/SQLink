@@ -5,6 +5,9 @@ on:
   push:
     branches: [ main, master ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-14
@@ -50,3 +53,34 @@ jobs:
         with:
           name: SQLink-ipa
           path: SQLink.ipa
+
+      - name: Delete existing release (overwrite single version)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=v1.0.4
+          REL=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+          REL_ID=$(echo "$REL" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])" 2>/dev/null || true)
+          if [ -n "$REL_ID" ]; then
+            curl -sS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/$REL_ID"
+            echo "deleted existing release $REL_ID"
+          fi
+          curl -sS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/$TAG" || true
+          echo "tag cleanup done"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.4
+          name: SQLink v1.0.4
+          files: SQLink.ipa
+          fail_on_unmatched_files: false
+          body: |
+            ## SQLink v1.0.4
+
+            - 查询历史：控制台右上角「时钟」按钮，自动记住最近 30 条执行过的 SQL，点一下回填重跑
+            - 复制单元格：结果表格中长按任意单元格即可复制单元格值
+            - 快速回到上次连接：连接列表顶部出现「上次：xxx」，一键进入，省去每次重选
+            - 沿用 v1.0.3：默认库直进、连接编辑、表筛选排序、SQL 自动补全、结果区可见可滚动、表内联编辑
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

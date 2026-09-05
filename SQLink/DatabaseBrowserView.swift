@@ -9,6 +9,7 @@ struct DatabaseBrowserView: View {
     @State private var error: String?
     @State private var loading = true
     @State private var search = ""
+    @State private var selectedDB: String? = nil
 
     private var filtered: [String] {
         search.isEmpty ? databases : databases.filter { $0.localizedCaseInsensitiveContains(search) }
@@ -27,20 +28,25 @@ struct DatabaseBrowserView: View {
             } else if loading {
                 ProgressView("连接中…")
             } else if let conn = connection {
-                List {
-                    NavigationLink("新建查询", destination: QueryConsoleView(connection: conn, db: nil))
-                        .foregroundColor(.accentColor)
-                    ForEach(filtered, id: \.self) { db in
-                        NavigationLink(db, destination: TableListView(profile: profile, db: db, connection: conn))
+                if let db = selectedDB {
+                    TableListView(profile: profile, db: db, connection: conn, onSwitchDB: { selectedDB = nil })
+                } else {
+                    List {
+                        NavigationLink("新建查询", destination: QueryConsoleView(connection: conn, db: nil, defaultTable: nil))
+                            .foregroundColor(.accentColor)
+                        ForEach(filtered, id: \.self) { db in
+                            NavigationLink(db, destination: TableListView(profile: profile, db: db, connection: conn))
+                        }
                     }
+                    .listStyle(.insetGrouped)
+                    .navigationTitle(profile.name)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .searchable(text: $search, prompt: "搜索数据库")
                 }
-                .listStyle(.insetGrouped)
-                .navigationTitle(profile.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .searchable(text: $search, prompt: "搜索数据库")
             }
         }
         .task { await connect() }
+        .onAppear { UserDefaults.standard.set(profile.id.uuidString, forKey: "lastConnectionID") }
     }
 
     func connect() async {
@@ -52,6 +58,9 @@ struct DatabaseBrowserView: View {
             await MainActor.run {
                 self.connection = conn
                 self.databases = dbs
+                if !profile.database.isEmpty {
+                    self.selectedDB = profile.database
+                }
             }
         } catch {
             let msg = error.localizedDescription
@@ -66,6 +75,7 @@ struct TableListView: View {
     let profile: ConnectionProfile
     let db: String
     let connection: MySQLConnection
+    var onSwitchDB: (() -> Void)? = nil
     @State private var tables: [(name: String, type: String)] = []
     @State private var loading = true
     @State private var error: String?
@@ -83,7 +93,7 @@ struct TableListView: View {
                 Text(error).foregroundColor(.red).padding()
             } else {
                 List {
-                    NavigationLink("新建查询（库：\(db)）", destination: QueryConsoleView(connection: connection, db: db))
+                    NavigationLink("新建查询（库：\(db)）", destination: QueryConsoleView(connection: connection, db: db, defaultTable: nil))
                         .foregroundColor(.accentColor)
                     ForEach(0..<filtered.count, id: \.self) { i in
                         let t = filtered[i]
@@ -96,6 +106,13 @@ struct TableListView: View {
                 .navigationTitle(db)
                 .navigationBarTitleDisplayMode(.inline)
                 .searchable(text: $search, prompt: "搜索表")
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        if let onSwitchDB = onSwitchDB {
+                            Button("切换库") { onSwitchDB() }
+                        }
+                    }
+                }
             }
         }
         .task { await load() }
@@ -105,81 +122,6 @@ struct TableListView: View {
         do {
             let t = try await connection.listTables(db: db)
             await MainActor.run { self.tables = t }
-        } catch {
-            let msg = error.localizedDescription
-            await MainActor.run { self.error = msg }
-        }
-        await MainActor.run { loading = false }
-    }
-}
-
-// MARK: - Table detail (structure + preview)
-struct TableDetailView: View {
-    let connection: MySQLConnection
-    let db: String
-    let table: String
-    @State private var columns: [ColumnInfo] = []
-    @State private var previewCols: [ColumnDef] = []
-    @State private var previewRows: [[String?]] = []
-    @State private var loading = true
-    @State private var error: String?
-
-    var body: some View {
-        List {
-            Section("结构（\(columns.count) 列）") {
-                if columns.isEmpty {
-                    Text("加载中…").foregroundColor(.secondary)
-                }
-                ForEach(columns) { c in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(c.field).font(.system(size: 14, weight: .bold))
-                            Spacer()
-                            if !c.key.isEmpty && c.key != " " {
-                                Text(c.key).font(.caption).padding(.horizontal, 6)
-                                    .background(Color.accentColor.opacity(0.15))
-                                    .foregroundColor(.accentColor)
-                                    .cornerRadius(4)
-                            }
-                        }
-                        Text("\(c.type)  \(c.null == "NO" ? "NOT NULL" : "NULL")")
-                            .font(.caption).foregroundColor(.secondary)
-                    }
-                }
-            }
-            Section("数据预览（前 100 行）") {
-                if loading {
-                    ProgressView()
-                } else if let error = error {
-                    Text(error).foregroundColor(.red)
-                } else if previewRows.isEmpty {
-                    Text("无数据").foregroundColor(.secondary)
-                } else {
-                    ResultGridView(columns: previewCols, rows: previewRows)
-                }
-            }
-            Section {
-                NavigationLink("打开查询控制台", destination: QueryConsoleView(connection: connection, db: db))
-            }
-        }
-        .navigationTitle(table)
-        .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
-    }
-
-    func load() async {
-        do {
-            async let cols = connection.listColumns(db: db, table: table)
-            async let prev = connection.preview(db: db, table: table, limit: 100)
-            let c = try await cols
-            let p = try await prev
-            var pc = [ColumnDef](); var pr = [[String?]]()
-            if case .result(let cc, let rr) = p { pc = cc; pr = rr }
-            await MainActor.run {
-                self.columns = c
-                self.previewCols = pc
-                self.previewRows = pr
-            }
         } catch {
             let msg = error.localizedDescription
             await MainActor.run { self.error = msg }

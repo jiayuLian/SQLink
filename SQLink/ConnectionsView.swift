@@ -13,10 +13,16 @@ struct ConnectionsView: View {
                 }
                 ForEach(store.profiles) { p in
                     NavigationLink(destination: DatabaseBrowserView(profile: p)) {
-                        ConnectionRow(profile: p)
+                        ConnectionRow(profile: p, onEdit: { editorTarget = p })
                     }
                     .swipeActions(edge: .trailing) {
+                        Button { editorTarget = p } label: { Label("编辑", systemImage: "pencil") }
+                            .tint(.accentColor)
                         Button(role: .destructive) { store.remove(p) } label: { Label("删除", systemImage: "trash") }
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button { editorTarget = p } label: { Label("编辑", systemImage: "pencil") }
+                            .tint(.accentColor)
                     }
                     .contextMenu {
                         Button { editorTarget = p } label: { Label("编辑", systemImage: "pencil") }

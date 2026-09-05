@@ -1,0 +1,10 @@
+# Build / packaging artifacts
+build/
+Payload/
+DerivedData/
+*.ipa
+ipa_dl/
+ipa_out/
+SQLink.xcodeproj/
+xcuserdata/
+.DS_Store

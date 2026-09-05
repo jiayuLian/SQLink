@@ -72,6 +72,69 @@ enum QueryResult {
     case result(columns: [ColumnDef], rows: [[String?]])
 }
 
+// MARK: - Filter & sort helpers
+enum FilterOperator: String, CaseIterable, Codable, Identifiable {
+    case equal, notEqual, lessThan, lessOrEqual, greaterThan, greaterOrEqual
+    case contains, notContains, startsWith, notStartsWith, endsWith, notEndsWith
+    case isNull, isNotNull, isEmpty, isNotEmpty, inList, notInList, custom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .equal: return "等于"
+        case .notEqual: return "不等于"
+        case .lessThan: return "小于"
+        case .lessOrEqual: return "小于等于"
+        case .greaterThan: return "大于"
+        case .greaterOrEqual: return "大于等于"
+        case .contains: return "包含"
+        case .notContains: return "不包含"
+        case .startsWith: return "开始以"
+        case .notStartsWith: return "不开始于"
+        case .endsWith: return "结束于"
+        case .notEndsWith: return "不结束于"
+        case .isNull: return "是 null"
+        case .isNotNull: return "不是 null"
+        case .isEmpty: return "是空的"
+        case .isNotEmpty: return "不是空的"
+        case .inList: return "在列表"
+        case .notInList: return "不在列表"
+        case .custom: return "自定义"
+        }
+    }
+
+    var needsValue: Bool {
+        switch self {
+        case .isNull, .isNotNull, .isEmpty, .isNotEmpty:
+            return false
+        default:
+            return true
+        }
+    }
+}
+
+enum SortDirection: String, CaseIterable, Codable, Identifiable {
+    case asc, desc
+    var id: String { rawValue }
+    var label: String { self == .asc ? "升序" : "降序" }
+}
+
+enum FilterLogic: String, CaseIterable, Identifiable {
+    case and = "AND"
+    case or = "OR"
+    var id: String { rawValue }
+    var label: String { rawValue }
+}
+
+struct FilterCondition: Identifiable, Codable, Hashable {
+    let id = UUID()
+    var field: String = ""
+    var op: FilterOperator = .contains
+    var value: String = ""
+    var enabled: Bool = true
+}
+
 // MARK: - MySQL data type names (subset, enough for display)
 enum MySQLDataType {
     static func name(for type: UInt8) -> String {

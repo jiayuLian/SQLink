@@ -60,7 +60,9 @@ final class MySQLConnection {
 
     func listColumns(db: String, table: String) async throws -> [ColumnInfo] {
         try await run {
-            let r = try self._query("SHOW FULL COLUMNS FROM `\(self.esc(db))`.`\(self.esc(table))`")
+            // NOTE: use plain SHOW COLUMNS (not FULL) so column indices match:
+            // 0 Field, 1 Type, 2 Null, 3 Key, 4 Default, 5 Extra
+            let r = try self._query("SHOW COLUMNS FROM `\(self.esc(db))`.`\(self.esc(table))`")
             guard case .result(_, let rows) = r else { return [] }
             return rows.map { row in
                 ColumnInfo(
@@ -75,8 +77,41 @@ final class MySQLConnection {
         }
     }
 
-    func preview(db: String, table: String, limit: Int = 100) async throws -> QueryResult {
-        try await run { try self._query("SELECT * FROM `\(self.esc(db))`.`\(self.esc(table))` LIMIT \(limit)") }
+    func countRows(db: String, table: String, whereClause: String? = nil) async throws -> Int {
+        try await run {
+            var sql = "SELECT COUNT(*) FROM `\(self.esc(db))`.`\(self.esc(table))`"
+            if let w = whereClause, !w.isEmpty { sql += " WHERE \(w)" }
+            let r = try self._query(sql)
+            guard case .result(_, let rows) = r,
+                  let first = rows.first,
+                  let raw = first.first else { return 0 }
+            return Int(raw ?? "0") ?? 0
+        }
+    }
+
+    func preview(db: String, table: String, limit: Int = 100,
+                 whereClause: String? = nil, orderBy: String? = nil) async throws -> QueryResult {
+        try await run {
+            var sql = "SELECT * FROM `\(self.esc(db))`.`\(self.esc(table))`"
+            if let w = whereClause, !w.isEmpty { sql += " WHERE \(w)" }
+            if let o = orderBy, !o.isEmpty { sql += " ORDER BY \(o)" }
+            sql += " LIMIT \(limit)"
+            return try self._query(sql)
+        }
+    }
+
+    func distinctValues(db: String, table: String, column: String, limit: Int = 100) async throws -> [String] {
+        try await run {
+            let sql = "SELECT DISTINCT `\(self.esc(column))` FROM `\(self.esc(db))`.`\(self.esc(table))` ORDER BY `\(self.esc(column))` LIMIT \(limit)"
+            let r = try self._query(sql)
+            guard case .result(_, let rows) = r else { return [] }
+            return rows.compactMap { $0.first ?? nil }
+        }
+    }
+
+    func escValue(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+              .replacingOccurrences(of: "'", with: "\\'")
     }
 
     func close() {
