@@ -12,6 +12,7 @@ enum ClientCap: UInt32 {
     case secureConnection  = 0x00008000
     case multiResults      = 0x00020000
     case pluginAuth        = 0x00080000
+    case pluginAuthLenencClientData = 0x00200000
 }
 func cap(_ c: ClientCap) -> UInt32 { c.rawValue }
 
@@ -36,6 +37,18 @@ func mysqlNativePassword(password: [UInt8], scramble: [UInt8]) -> [UInt8] {
     let stage3 = sha1(combined)
     var result = [UInt8](repeating: 0, count: 20)
     for i in 0..<20 { result[i] = stage1[i] ^ stage3[i] }
+    return result
+}
+
+// MARK: - caching_sha2_password initial auth response
+func cachingSha2Password(password: [UInt8], scramble: [UInt8]) -> [UInt8] {
+    let stage1 = sha256(password)
+    let stage2 = sha256(stage1)
+    var combined = scramble
+    combined.append(contentsOf: stage2)
+    let stage3 = sha256(combined)
+    var result = [UInt8](repeating: 0, count: 32)
+    for i in 0..<32 { result[i] = stage1[i] ^ stage3[i] }
     return result
 }
 

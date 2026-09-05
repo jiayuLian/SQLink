@@ -195,6 +195,7 @@ final class MySQLConnection {
         clientCap |= cap(.pluginAuth)
         clientCap |= cap(.secureConnection)
         clientCap |= cap(.multiResults)
+        clientCap |= cap(.pluginAuthLenencClientData)
         if !profile.database.isEmpty { clientCap |= cap(.connectWithDB) }
         if profile.useTLS { clientCap |= cap(.ssl) }
 
@@ -202,8 +203,8 @@ final class MySQLConnection {
         if usePlugin == "mysql_native_password" {
             authResponse = password.isEmpty ? [] : mysqlNativePassword(password: [UInt8](password.utf8), scramble: scramble)
         } else {
-            // caching_sha2_password: first response is SHA256(password)
-            authResponse = sha256([UInt8](password.utf8))
+            // caching_sha2_password: initial response = XOR(SHA256(pwd), SHA256(scramble + SHA256(SHA256(pwd))))
+            authResponse = password.isEmpty ? [] : cachingSha2Password(password: [UInt8](password.utf8), scramble: scramble)
         }
 
         if profile.useTLS {
@@ -223,21 +224,24 @@ final class MySQLConnection {
         }
 
         // Handshake response (without CLIENT_SSL once TLS is active)
+        // Format: cap(4) + maxPacket(4) + charset(1) + reserved(23) + username\0 + authResponse(lenEnc) + db\0 + plugin\0
         var payload: [UInt8] = []
         payload += withUnsafeBytes(of: (clientCap & ~cap(.ssl)).littleEndian) { Array($0) }
         payload += withUnsafeBytes(of: UInt32(0).littleEndian) { Array($0) }
         payload += [45]
         payload += [UInt8](repeating: 0, count: 23)
+        payload += [UInt8](profile.user.utf8)
+        payload.append(0)
+        payload += lenEncData(authResponse)
         if !profile.database.isEmpty {
             payload += [UInt8](profile.database.utf8)
             payload.append(0)
         }
         payload += [UInt8](usePlugin.utf8)
         payload.append(0)
-        payload += lenEncData(authResponse)
         try writePacket(payload)
 
-        try handleAuthResult(password: password)
+        try handleAuthResult(password: password, initialScramble: scramble)
     }
 
     private func upgradeTLS(allowSelfSigned: Bool) throws {
@@ -253,51 +257,65 @@ final class MySQLConnection {
         outputStream?.setProperty(sslSettings, forKey: settingsKey)
     }
 
-    private func handleAuthResult(password: String) throws {
-        let pkt = try readPacket()
-        guard !pkt.isEmpty else { throw MySQLError.authFailed("服务器返回空响应") }
-        let first = pkt[0]
-        if first == 0x00 { return }
-        if first == 0xFF {
-            let (code, msg) = parseError(pkt)
-            throw MySQLError.serverError(code: code, message: msg)
-        }
-        if first == 0x01 {
-            guard pkt.count >= 2 else { throw MySQLError.authFailed("AuthMoreData 数据异常") }
-            let sub = pkt[1]
-            if sub == 0x03 {
-                let ok = try readPacket()
-                if ok.first == 0x00 { return }
-                if ok.first == 0xFF { let (c, m) = parseError(ok); throw MySQLError.serverError(code: c, message: m) }
-                throw MySQLError.authFailed("快速认证后响应异常")
+    private func handleAuthResult(password: String, initialScramble: [UInt8]) throws {
+        var currentScramble = initialScramble
+        while true {
+            let pkt = try readPacket()
+            guard !pkt.isEmpty else { throw MySQLError.authFailed("服务器返回空响应") }
+            let first = pkt[0]
+            if first == 0x00 { return }
+            if first == 0xFF {
+                let (code, msg) = parseError(pkt)
+                throw MySQLError.serverError(code: code, message: msg)
             }
-            if sub == 0x04 {
-                if isTLS {
-                    try writePacket(lenEncData([UInt8](password.utf8)))
-                    let ok = try readPacket()
-                    if ok.first == 0x00 { return }
-                    if ok.first == 0xFF { let (c, m) = parseError(ok); throw MySQLError.serverError(code: c, message: m) }
-                    throw MySQLError.authFailed("完整认证（TLS）后响应异常")
-                } else {
-                    try writePacket([0x02]) // request public key
-                    let pubPkt = try readPacket()
-                    guard pubPkt.count > 1, pubPkt[0] == 0x01 else { throw MySQLError.authFailed("未收到服务器公钥") }
-                    let der = Array(pubPkt[1...])
-                    let enc = try rsaEncryptPassword(password: password, der: der)
-                    try writePacket(lenEncData(enc))
-                    let ok = try readPacket()
-                    if ok.first == 0x00 { return }
-                    if ok.first == 0xFF { let (c, m) = parseError(ok); throw MySQLError.serverError(code: c, message: m) }
-                    throw MySQLError.authFailed("完整认证（RSA）后响应异常")
+            if first == 0x01 {
+                guard pkt.count >= 2 else { throw MySQLError.authFailed("AuthMoreData 数据异常") }
+                let sub = pkt[1]
+                if sub == 0x03 {
+                    // fast auth success indicator: next packet should be OK
+                    continue
                 }
+                if sub == 0x04 {
+                    // full authentication required
+                    if isTLS {
+                        try writePacket(lenEncData([UInt8](password.utf8)))
+                        continue
+                    } else {
+                        try writePacket([0x02]) // request public key
+                        let pubPkt = try readPacket()
+                        guard pubPkt.count > 1, pubPkt[0] == 0x01 else { throw MySQLError.authFailed("未收到服务器公钥") }
+                        let der = Array(pubPkt[1...])
+                        let enc = try rsaEncryptPassword(password: password, scramble: currentScramble, der: der)
+                        try writePacket(lenEncData(enc))
+                        continue
+                    }
+                }
+                throw MySQLError.authFailed("不支持的 AuthMoreData 子类型 \(sub)")
             }
-            throw MySQLError.authFailed("不支持的 AuthMoreData 子类型 \(sub)")
+            if first == 0xFE {
+                // Auth Switch Request: [0xFE, plugin_name\0, auth_plugin_data...]
+                var i = 1
+                let (newPlugin, next) = readCString(pkt, i)
+                i = next
+                let newScramble = Array(pkt[i...])
+                if !newScramble.isEmpty { currentScramble = newScramble }
+                let pwdBytes = [UInt8](password.utf8)
+                let response: [UInt8]
+                if newPlugin == "mysql_native_password" {
+                    response = password.isEmpty ? [] : mysqlNativePassword(password: pwdBytes, scramble: newScramble)
+                } else if newPlugin == "caching_sha2_password" {
+                    response = password.isEmpty ? [] : cachingSha2Password(password: pwdBytes, scramble: newScramble)
+                } else {
+                    throw MySQLError.authFailed("服务器请求不支持的认证插件：\(newPlugin)")
+                }
+                try writePacket(lenEncData(response))
+                continue
+            }
+            throw MySQLError.authFailed("认证响应异常 (0x\(String(first, radix: 16)))")
         }
-        if first == 0xFE, pkt.count < 9 { return } // EOF treated as success
-        throw MySQLError.authFailed("认证响应异常 (0x\(String(first, radix: 16)))")
     }
 
-    private func rsaEncryptPassword(password: String, der: [UInt8]) throws -> [UInt8] {
+    private func rsaEncryptPassword(password: String, scramble: [UInt8], der: [UInt8]) throws -> [UInt8] {
         let data = Data(der)
         var error: Unmanaged<CFError>?
         guard let key = SecKeyCreateWithData(data as CFData,
@@ -305,15 +323,27 @@ final class MySQLConnection {
                 &error), error == nil else {
             throw MySQLError.authFailed("无法解析服务器公钥（请改用 TLS 或 mysql_native_password 账号）")
         }
-        let pw = Data([UInt8](password.utf8))
-        guard let cipher = SecKeyCreateEncryptedData(key, .rsaEncryptionOAEPSHA256, pw as CFData, &error), error == nil else {
-            // Fall back to SHA-1 OAEP if server uses that variant
-            guard let cipher2 = SecKeyCreateEncryptedData(key, .rsaEncryptionOAEPSHA1, pw as CFData, &error), error == nil else {
-                throw MySQLError.authFailed("RSA 加密失败（请改用 TLS 或 mysql_native_password 账号）")
-            }
-            return Array(cipher2 as Data)
+
+        // caching_sha2_password full auth: XOR(password + NUL, scramble) then RSA encrypt
+        var plain = [UInt8](password.utf8)
+        plain.append(0)
+        for idx in plain.indices {
+            plain[idx] ^= scramble[idx % max(scramble.count, 1)]
         }
-        return Array(cipher as Data)
+        let pw = Data(plain)
+
+        let algorithms: [SecKeyAlgorithm] = [
+            .rsaEncryptionPKCS1,      // MySQL 8.0 default
+            .rsaEncryptionOAEPSHA1,
+            .rsaEncryptionOAEPSHA256
+        ]
+        for alg in algorithms {
+            var err: Unmanaged<CFError>?
+            if let cipher = SecKeyCreateEncryptedData(key, alg, pw as CFData, &err) {
+                return Array(cipher as Data)
+            }
+        }
+        throw MySQLError.authFailed("RSA 加密失败（请改用 TLS 或 mysql_native_password 账号）")
     }
 
     // MARK: - Query (sync)
