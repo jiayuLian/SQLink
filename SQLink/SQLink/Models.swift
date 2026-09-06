@@ -73,6 +73,7 @@ struct ColumnInfo: Identifiable {
     let key: String
     let `default`: String
     let extra: String
+    let comment: String
 }
 
 enum QueryResult {
@@ -193,6 +194,7 @@ enum ThemeMode: Int, CaseIterable, Identifiable, Codable {
 /// 用 @Published + 手动落盘 UserDefaults，避免在 ObservableObject 内使用 @AppStorage
 /// 不触发 objectWillChange 的经典坑。
 final class AppSettings: ObservableObject {
+    static let shared = AppSettings()
     @Published var theme: ThemeMode {
         didSet { UserDefaults.standard.set(theme.rawValue, forKey: "sqlink.theme") }
     }
@@ -217,6 +219,13 @@ final class AppSettings: ObservableObject {
     @Published var avatarURL: String {
         didSet { UserDefaults.standard.set(avatarURL, forKey: "sqlink.avatarURL") }
     }
+    @Published var nickname: String {
+        didSet { UserDefaults.standard.set(nickname, forKey: "sqlink.nickname") }
+    }
+    /// 会员到期时间（ISO 字符串）。用于「服务器不可达」兜底：本地缓存判断会员是否仍在有效期。
+    @Published var proExpiresAt: String {
+        didSet { UserDefaults.standard.set(proExpiresAt, forKey: "sqlink.proExpiresAt") }
+    }
     @Published var guestMode: Bool {
         didSet { UserDefaults.standard.set(guestMode, forKey: "sqlink.guestMode") }
     }
@@ -239,6 +248,8 @@ final class AppSettings: ObservableObject {
         self.authToken = d.string(forKey: "sqlink.authToken") ?? ""
         self.authEmail = d.string(forKey: "sqlink.authEmail") ?? ""
         self.avatarURL = d.string(forKey: "sqlink.avatarURL") ?? ""
+        self.nickname = d.string(forKey: "sqlink.nickname") ?? ""
+        self.proExpiresAt = d.string(forKey: "sqlink.proExpiresAt") ?? ""
         self.guestMode = (d.object(forKey: "sqlink.guestMode") as? Bool) ?? false
         if let pd = d.data(forKey: "sqlink.plan"),
            let p = try? JSONDecoder().decode(PlanConfig.self, from: pd) {
@@ -246,6 +257,8 @@ final class AppSettings: ObservableObject {
         } else {
             self.plan = .default
         }
+        // 抗卸载：本机无登录态时，尝试从 iCloud Keychain 恢复（重装/换机，同 Apple ID）。
+        restoreFromKeychainIfNeeded()
     }
 
     var isLoggedIn: Bool { !authToken.isEmpty || guestMode }
@@ -254,8 +267,12 @@ final class AppSettings: ObservableObject {
         authToken = ""
         authEmail = ""
         avatarURL = ""
+        nickname = ""
+        proExpiresAt = ""
         guestMode = false
         isPro = false
+        // 清除 iCloud Keychain 中的凭证，彻底登出（换机/重装后也不再自动恢复）。
+        KeychainSync.clearAll()
     }
 
     func enterGuestMode() {
@@ -265,11 +282,57 @@ final class AppSettings: ObservableObject {
         isPro = false
     }
 
-    func applyMembership(_ email: String, token: String, isPro: Bool) {
+    func applyMembership(_ email: String, token: String, isPro: Bool, nickname: String = "", expiresAt: String = "") {
         self.authEmail = email
         self.authToken = token
         self.guestMode = false
         self.isPro = isPro
+        self.nickname = nickname
+        self.proExpiresAt = expiresAt
+        // 登录/注册成功后立即把登录态与会员状态固化到 iCloud Keychain，
+        // 使重装 / 换机（同 Apple ID）可自动恢复，无需重新登录。
+        syncCredentialsToKeychain()
+    }
+
+    /// 将当前登录态与会员状态同步到 iCloud Keychain（同 Apple ID 设备抗卸载/换机恢复）。
+    /// 若 iCloud 钥匙串不可用则静默失败，不影响主流程。仅在已登录时有意义。
+    func syncCredentialsToKeychain() {
+        guard !authToken.isEmpty else { return }
+        KeychainSync.save(authToken, for: KeychainSync.authTokenKey)
+        KeychainSync.save(authEmail, for: KeychainSync.authEmailKey)
+        KeychainSync.save(nickname, for: KeychainSync.nicknameKey)
+        KeychainSync.save(proExpiresAt, for: KeychainSync.proExpiresAtKey)
+        KeychainSync.save(isPro ? "1" : "0", for: KeychainSync.isProKey)
+    }
+
+    /// 启动 / 重装 / 换机时，从 iCloud Keychain 恢复登录态与会员状态。
+    /// 仅当本机 UserDefaults 没有登录态（即首次安装或卸载重装）时才尝试，
+    /// 避免覆盖本机已有的有效会话。
+    private func restoreFromKeychainIfNeeded() {
+        guard authToken.isEmpty else { return }
+        guard let token = KeychainSync.read(KeychainSync.authTokenKey), !token.isEmpty else { return }
+        self.authToken = token
+        self.authEmail = KeychainSync.read(KeychainSync.authEmailKey) ?? ""
+        self.nickname = KeychainSync.read(KeychainSync.nicknameKey) ?? ""
+        self.proExpiresAt = KeychainSync.read(KeychainSync.proExpiresAtKey) ?? ""
+        self.isPro = KeychainSync.read(KeychainSync.isProKey) == "1"
+    }
+
+    /// 服务器不可达兜底：本地缓存判断会员是否仍有效。
+    /// 年卡：未过期则维持 Pro；永久（proExpiresAt 为空）且本地 isPro 为真则维持 Pro；其余降级免费。
+    func resolveProFallback() -> Bool {
+        guard isPro else { return false }
+        if proExpiresAt.isEmpty { return true } // lifetime
+        guard let exp = ISO8601DateFormatter().date(from: proExpiresAt)
+                ?? dateFromMySQL(proExpiresAt) else { return true }
+        return exp > Date()
+    }
+
+    private func dateFromMySQL(_ s: String) -> Date? {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        return f.date(from: s)
     }
 
     /// 拉取后端公共配置（免费额度 + 价格），失败则保留本地缓存。
@@ -284,18 +347,13 @@ final class AppSettings: ObservableObject {
 }
 
 /// 后端返回的公开配置（字段与 /api/public/config 的 snake_case 对应）。
+/// 仅保留功能所需字段（免费版行数门禁）。价格等付费信息不进入客户端，避免触发 App Store 3.1.1 反引导审核。
 struct PlanConfig: Codable {
     var freeExportLimit: Int
     var freeViewLimit: Int
-    var proPriceYearly: Int
-    var proPriceLifetime: Int
-    var currency: String
 
     static let `default` = PlanConfig(
         freeExportLimit: 100,
-        freeViewLimit: 100,
-        proPriceYearly: 68,
-        proPriceLifetime: 98,
-        currency: "¥"
+        freeViewLimit: 100
     )
 }

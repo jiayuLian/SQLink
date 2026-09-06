@@ -73,6 +73,12 @@ struct TableDetailView: View {
     @State private var error: String?
     @State private var rowCount: Int? = nil
 
+    // 建表 SQL 弹窗
+    @State private var showDDL = false
+    @State private var ddlText: String = ""
+    @State private var ddlLoading = false
+    @State private var ddlError: String?
+
     // filter & sort (lifted here so they persist across sheet / navigation)
     @State private var showFilter = false
     @State private var filterConditions: [FilterCondition] = []
@@ -102,7 +108,15 @@ struct TableDetailView: View {
                         }
                         Text("\(c.type)  \(c.null == "NO" ? "NOT NULL" : "NULL")")
                             .font(.caption).foregroundColor(.secondary)
+                        if !c.comment.isEmpty {
+                            Text("备注：\(c.comment)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
+                }
+                Button { Task { await loadDDL() } } label: {
+                    Label("查看建表 SQL", systemImage: "doc.plaintext")
                 }
             }
 
@@ -165,6 +179,49 @@ struct TableDetailView: View {
         .onChange(of: activeWhere) { _ in Task { await load() } }
         .onChange(of: activeOrderBy) { _ in Task { await load() } }
         .task { await load() }
+        .sheet(isPresented: $showDDL) {
+            NavigationView {
+                Group {
+                    if ddlLoading {
+                        ProgressView("加载中…")
+                    } else if let err = ddlError {
+                        ScrollView { Text(err).foregroundColor(.red).padding() }
+                    } else {
+                        ScrollView {
+                            Text(ddlText.isEmpty ? "（无建表语句）" : ddlText)
+                                .font(.system(.body, design: .monospaced))
+                                .padding()
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .navigationTitle("建表 SQL")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("完成") { showDDL = false }
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadDDL() async {
+        ddlLoading = true; ddlError = nil; ddlText = ""
+        do {
+            let sql = try await connection.showCreateTable(db: db, table: table)
+            await MainActor.run {
+                self.ddlText = sql
+                self.ddlLoading = false
+                self.showDDL = true
+            }
+        } catch {
+            await MainActor.run {
+                self.ddlError = error.localizedDescription
+                self.ddlLoading = false
+                self.showDDL = true
+            }
+        }
     }
 
     private var filterStatusSummary: String {
@@ -486,6 +543,9 @@ struct TableDataView: View {
             }
             .onChange(of: activeWhere) { _ in page = 1; Task { await load() } }
             .onChange(of: activeOrderBy) { _ in page = 1; Task { await load() } }
+            .onChange(of: page) { _ in
+                Task { await load() }
+            }
             .task { await load() }
     }
 
@@ -534,7 +594,7 @@ struct TableDataView: View {
                                          onChange: { hasChanges = true })
                             .frame(maxHeight: .infinity)
                             .contentShape(Rectangle())
-                            .gesture(
+                            .simultaneousGesture(
                                 MagnificationGesture()
                                     .updating($gridMagnify) { value, state, _ in state = value }
                                     .onEnded { value in
@@ -546,7 +606,7 @@ struct TableDataView: View {
                         ResultGridView(columns: previewCols, rows: previewRows, scale: gridScale * gridMagnify)
                             .frame(maxHeight: .infinity)
                             .contentShape(Rectangle())
-                            .gesture(
+                            .simultaneousGesture(
                                 MagnificationGesture()
                                     .updating($gridMagnify) { value, state, _ in state = value }
                                     .onEnded { value in
