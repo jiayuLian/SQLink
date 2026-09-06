@@ -12,7 +12,7 @@ struct FeedbackView: View {
     @State private var alertMsg: String?
     @State private var showAlert = false
 
-    private let maxContent = 1000
+    private let maxContent = 500
     private let maxContact = 100
 
     var body: some View {
