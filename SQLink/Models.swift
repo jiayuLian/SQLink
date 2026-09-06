@@ -193,6 +193,7 @@ enum ThemeMode: Int, CaseIterable, Identifiable, Codable {
 /// 用 @Published + 手动落盘 UserDefaults，避免在 ObservableObject 内使用 @AppStorage
 /// 不触发 objectWillChange 的经典坑。
 final class AppSettings: ObservableObject {
+    static let shared = AppSettings()
     @Published var theme: ThemeMode {
         didSet { UserDefaults.standard.set(theme.rawValue, forKey: "sqlink.theme") }
     }

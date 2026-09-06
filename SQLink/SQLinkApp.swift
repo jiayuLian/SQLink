@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct SQLinkApp: App {
     @StateObject private var store = ConnectionStore()
-    @StateObject private var settings = AppSettings()
+    @StateObject private var settings = AppSettings.shared
 
     var body: some Scene {
         WindowGroup {

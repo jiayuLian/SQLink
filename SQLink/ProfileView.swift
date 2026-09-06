@@ -391,4 +391,3 @@ struct ActivationSheet: View {
         }
     }
 }
-}
