@@ -92,7 +92,7 @@ struct ProfileView: View {
                         Link("开源仓库 / 更新日志", destination: url)
                     }
                     HStack {
-                        Text("联系作者（微信）")
+                        Text("联系作者（仅用于问题反馈）")
                         Spacer()
                         Text(authorWeChat).foregroundColor(.secondary)
                     }

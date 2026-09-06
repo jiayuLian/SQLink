@@ -62,6 +62,97 @@ private func buildOrderBy(field: String, direction: SortDirection) -> String? {
     field.isEmpty ? nil : "`\(field.replacingOccurrences(of: "`", with: "``"))` \(direction.rawValue.uppercased())"
 }
 
+// MARK: - DDL 美化与高亮
+private let sqlKeywordSet: Set<String> = [
+    "CREATE","TABLE","TEMPORARY","PRIMARY","KEY","NOT","NULL","DEFAULT","UNIQUE",
+    "AUTO_INCREMENT","ENGINE","CHARSET","COLLATE","CONSTRAINT","FOREIGN","REFERENCES",
+    "INDEX","UNSIGNED","ZEROFILL","ON","DELETE","UPDATE","CASCADE","COMMENT","IF",
+    "EXISTS","ALGORITHM","LOCK","FULLTEXT","SPATIAL","VIEW","AS","SELECT","FROM",
+    "WHERE","AND","OR","ORDER","BY","LIMIT","INNER","LEFT","RIGHT","OUTER","JOIN",
+    "SET","VALUES","INSERT","INTO","REPLACE","DROP","ALTER","ADD","MODIFY","CHANGE",
+    "DESC","ASC","DISTINCT","GROUP","HAVING","LIKE","IN","IS","BETWEEN"
+]
+
+/// 把 SHOW CREATE TABLE 的整段语句整理成带缩进的多行文本（只增删空白，不改变 SQL 语义）。
+private func formatCreateTable(_ raw: String) -> String {
+    let compact = raw.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                     .trimmingCharacters(in: .whitespaces)
+    guard !compact.isEmpty else { return raw }
+    var out = ""
+    var depth = 0
+    var it = compact.startIndex
+    while it < compact.endIndex {
+        let c = compact[it]
+        if c == "(" {
+            out.append("(")
+            depth += 1
+            if depth == 1 { out.append("\n  ") }
+            it = compact.index(after: it)
+        } else if c == ")" {
+            depth -= 1
+            if depth <= 0 { out.append("\n)") } else { out.append(")") }
+            if depth < 0 { depth = 0 }
+            it = compact.index(after: it)
+        } else if c == "," {
+            if depth == 1 { out.append(",\n  ") } else { out.append(",") }
+            it = compact.index(after: it)
+        } else {
+            out.append(String(c))
+            it = compact.index(after: it)
+        }
+    }
+    let opts: [(String, String)] = [
+        ("ENGINE", "\\w+"),
+        ("DEFAULT CHARSET", "\\w+"),
+        ("COLLATE", "\\w+"),
+        ("AUTO_INCREMENT", "\\d+"),
+        ("ROW_FORMAT", "\\w+"),
+        ("COMMENT", "'[^']*'")
+    ]
+    for (kw, valPat) in opts {
+        let pat = "(\\s+)\(kw)(\\s*=\\s*\(valPat))"
+        if let re = try? NSRegularExpression(pattern: pat) {
+            out = re.stringByReplacingMatches(in: out,
+                                               range: NSRange(out.startIndex..., in: out),
+                                               withTemplate: "\n\(kw)$2")
+        }
+    }
+    return out
+}
+
+/// 简易 SQL 语法高亮：关键字 / 反引号标识符 / 字符串 / 数字 分别着色，类似数据库客户端。
+private func highlightSQL(_ source: String) -> AttributedString {
+    var result = AttributedString()
+    let pattern = "(--[^\\n]*|#[^\\n]*|/\\*.*?\\*/|'[^']*'|`[^`]*`|\\d+(?:\\.\\d+)?|[A-Za-z_][A-Za-z0-9_]*|\\s+|[(),;.]|[^\\s])"
+    guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+        return AttributedString(source)
+    }
+    let ns = source as NSString
+    let matches = re.matches(in: source, range: NSRange(location: 0, length: ns.length))
+    let kwColor = Color.accentColor
+    let idColor = Color(red: 0.16, green: 0.55, blue: 0.38)
+    let strColor = Color(red: 0.78, green: 0.42, blue: 0.12)
+    let numColor = Color(red: 0.50, green: 0.28, blue: 0.70)
+    for m in matches {
+        guard let range = Range(m.range, in: source) else { continue }
+        let token = String(source[range])
+        var attr = AttributedString(token)
+        if token.hasPrefix("`") {
+            attr.foregroundColor = idColor
+        } else if token.hasPrefix("'") {
+            attr.foregroundColor = strColor
+        } else if token.hasPrefix("--") || token.hasPrefix("#") || token.hasPrefix("/*") {
+            attr.foregroundColor = Color.gray
+        } else if let _ = Double(token), token.rangeOfCharacter(from: .decimalDigits) != nil {
+            attr.foregroundColor = numColor
+        } else if sqlKeywordSet.contains(token.uppercased()) {
+            attr.foregroundColor = kwColor
+        }
+        result += attr
+    }
+    return result
+}
+
 // MARK: - Table detail
 struct TableDetailView: View {
     let connection: MySQLConnection
@@ -78,6 +169,7 @@ struct TableDetailView: View {
     @State private var ddlText: String = ""
     @State private var ddlLoading = false
     @State private var ddlError: String?
+    @State private var ddlScale: CGFloat = 1.0
 
     // filter & sort (lifted here so they persist across sheet / navigation)
     @State private var showFilter = false
@@ -192,16 +284,36 @@ struct TableDetailView: View {
                         ScrollView { Text(err).foregroundColor(.red).padding() }
                     } else {
                         ScrollView {
-                            Text(ddlText.isEmpty ? "（无建表语句）" : ddlText)
+                            Text(ddlDisplay)
                                 .font(.system(.body, design: .monospaced))
-                                .padding()
+                                .scaleEffect(ddlScale)
                                 .textSelection(.enabled)
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(.secondarySystemBackground))
+                                .cornerRadius(10)
+                                .padding(8)
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    MagnificationGesture()
+                                        .onChanged { v in ddlScale = min(max(v, 0.6), 4.0) }
+                                )
                         }
                     }
                 }
                 .navigationTitle("建表 SQL")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("1:1") { ddlScale = 1.0 }
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            UIPasteboard.general.string = ddlText.isEmpty ? "" : formatCreateTable(ddlText)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                    }
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("完成") { showDDL = false }
                     }
@@ -226,6 +338,12 @@ struct TableDetailView: View {
                 self.showDDL = true
             }
         }
+    }
+
+    /// DDL 展示文本：整理缩进 + 语法高亮；空时给占位提示。
+    private var ddlDisplay: AttributedString {
+        if ddlText.isEmpty { return AttributedString("（无建表语句）") }
+        return highlightSQL(formatCreateTable(ddlText))
     }
 
     private var filterStatusSummary: String {
