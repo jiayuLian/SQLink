@@ -543,7 +543,7 @@ struct TableDataView: View {
             }
             .onChange(of: activeWhere) { _ in page = 1; Task { await load() } }
             .onChange(of: activeOrderBy) { _ in page = 1; Task { await load() } }
-            .onChange(of: page) { _ in Task { await load() } }
+            .onChange(of: page) { _ in _ = Task { await load() } }
             .task { await load() }
     }
 

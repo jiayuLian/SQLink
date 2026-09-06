@@ -60,7 +60,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=v1.0.8
+          TAG=v1.0.9
           REL=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
           REL_ID=$(echo "$REL" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])" 2>/dev/null || true)
           if [ -n "$REL_ID" ]; then
@@ -73,17 +73,21 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.8
-          name: SQLink v1.0.8
+          tag_name: v1.0.9
+          name: SQLink v1.0.9
           files: SQLink.ipa
           fail_on_unmatched_files: false
           body: |
-            ## SQLink v1.0.8（集成测试版，不含 IAP）
+            ## SQLink v1.0.9（集成测试版，不含 IAP）
 
             ### 本次更新
-            - 整合此前累积改动并统一发布：意见反馈（iOS 端提交 + 后端双重限流）、iCloud 钥匙串抗卸载（换机/重装免登录自动恢复会员）、移除手动刷新按钮改静默同步
-            - 全接口防爆破加固：登录账号级失败锁定（5 次错误锁 15 分钟）、激活码兑换账号级限流（10 分钟内最多 10 次，超出锁 10 分钟）、管理员密钥 1 分钟错 3 次锁 30 分钟、反馈字数 10~500
-            - 合规清理：移除 App 内微信收款码 / 价格引导（为后续上架做准备）
+            - 「我的」页重排：账号置顶、外观第二；未登录时仅显示「登录/注册」入口且不显示退出按钮，登录后账号右侧显示「免费版 / 会员版」；移除服务器地址、会员栏、分享 App 等入口
+            - 移除 App 内服务器地址显示与「修改服务器地址」入口（默认域名已内置）；头像点击直接跳相册选图（无「更换头像」文字），未登录点击头像跳登录页
+            - 联系方式移入「关于」：微信（点击复制）/ 邮箱（mailto）
+            - 数据浏览修复：分页「下一页」不刷新的问题；数据表格双指缩放（MagnificationGesture 改为 simultaneousGesture 避免被 ScrollView 吞掉）
+            - 表结构页增强：字段显示 COMMENT 备注；新增「查看建表 SQL」弹窗（SHOW CREATE TABLE，类似 Navicat）
+            - 筛选条件支持每条独立 AND/OR 组合（首条忽略，其后每条可选 AND 或 OR）
+            - 整合此前累积改动：意见反馈、iCloud 钥匙串抗卸载、全接口防爆破、合规清理
 
             ## SQLink v1.0.7
 

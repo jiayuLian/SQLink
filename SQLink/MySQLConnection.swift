@@ -91,8 +91,8 @@ final class MySQLConnection {
         try await run {
             let r = try self._query("SHOW CREATE TABLE `\(self.esc(db))`.`\(self.esc(table))`")
             guard case .result(_, let rows) = r, let row = rows.first else { return "" }
-            // 第 1 列是 CREATE TABLE 语句（第 0 列为表名）
-            return row.count > 1 ? (row[1] ?? "") : (row.first ?? "")
+            // 第 1 列是 CREATE TABLE 语句（第 0 列为表名）；row 为 [String?]，避免 row.first 双层可选
+            return row.count > 1 ? (row[1] ?? "") : ""
         }
     }
 
