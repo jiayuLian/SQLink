@@ -37,12 +37,15 @@ struct SQLinkApp: App {
             let data = try await AuthService.shared.fetchMembership(baseURL: settings.apiBaseURL, token: settings.authToken)
             await MainActor.run {
                 if let email = data.email { settings.authEmail = email }
+                if let nickname = data.nickname { settings.nickname = nickname }
                 settings.isPro = data.isPro
+                settings.proExpiresAt = data.expiresAt ?? ""
                 settings.avatarURL = data.avatar ?? ""
             }
         } catch {
-            // token 过期或网络异常：保持本地状态，不强制登出，避免弱网影响使用
-            print("刷新会员状态失败：\(error.localizedDescription)")
+            // 服务器不可达 / token 过期：用本地缓存兜底，避免已付费会员被误判为免费
+            await MainActor.run { settings.isPro = settings.resolveProFallback() }
+            print("刷新会员状态失败（已启用本地兜底）：\(error.localizedDescription)")
         }
         _ = await plan
     }
