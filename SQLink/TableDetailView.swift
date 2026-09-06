@@ -176,8 +176,12 @@ struct TableDetailView: View {
                                 activeWhere = w; activeOrderBy = o
                             })
         }
-        .onChange(of: activeWhere) { _ in Task { await load() } }
-        .onChange(of: activeOrderBy) { _ in Task { await load() } }
+        .onChange(of: activeWhere) { _ in
+            Task { await load() }
+        }
+        .onChange(of: activeOrderBy) { _ in
+            Task { await load() }
+        }
         .task { await load() }
         .sheet(isPresented: $showDDL) {
             NavigationView {
@@ -543,7 +547,9 @@ struct TableDataView: View {
             }
             .onChange(of: activeWhere) { _ in page = 1; Task { await load() } }
             .onChange(of: activeOrderBy) { _ in page = 1; Task { await load() } }
-            .onChange(of: page) { _ in _ = Task { await load() } }
+            .onChange(of: page) { _ in
+                Task { await load() }
+            }
             .task { await load() }
     }
 

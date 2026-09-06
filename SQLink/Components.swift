@@ -45,6 +45,7 @@ struct ConnectionRow: View {
 struct ResultGridView: View {
     let columns: [ColumnDef]
     let rows: [[String?]]
+    var scale: CGFloat = 1.0
 
     var body: some View {
         if columns.isEmpty {
@@ -55,9 +56,9 @@ struct ResultGridView: View {
                     HStack(spacing: 0) {
                         ForEach(columns) { c in
                             Text(c.name)
-                                .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                .frame(minWidth: 120, alignment: .leading)
-                                .padding(6)
+                                .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
+                                .frame(minWidth: 120 * scale, alignment: .leading)
+                                .padding(6 * scale)
                                 .background(Color.gray.opacity(0.18))
                         }
                     }
@@ -68,10 +69,10 @@ struct ResultGridView: View {
                                 let v = row[safe: j]
                                 let display = v == nil ? "NULL" : (v! ?? "")
                                 Text(display)
-                                    .font(.system(.subheadline, design: .monospaced))
+                                    .font(.system(size: 12 * scale, design: .monospaced))
                                     .foregroundColor(v == nil ? .secondary : .primary)
-                                    .frame(minWidth: 120, alignment: .leading)
-                                    .padding(6)
+                                    .frame(minWidth: 120 * scale, alignment: .leading)
+                                    .padding(6 * scale)
                                     .background((ri + j) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
                                     .lineLimit(4)
                                     .contextMenu {
@@ -98,6 +99,7 @@ struct EditableGridView: View {
     let columns: [ColumnInfo]
     @Binding var rows: [[String?]]
     let originalRows: [[String?]]
+    var scale: CGFloat = 1.0
     let onChange: () -> Void
 
     private func binding(for ri: Int, _ ci: Int) -> Binding<String> {
@@ -120,9 +122,9 @@ struct EditableGridView: View {
                 HStack(spacing: 0) {
                     ForEach(0..<columns.count, id: \.self) { ci in
                         Text(columns[ci].field)
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .frame(minWidth: 120, alignment: .leading)
-                            .padding(6)
+                            .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
+                            .frame(minWidth: 120 * scale, alignment: .leading)
+                            .padding(6 * scale)
                             .background(Color.gray.opacity(0.18))
                     }
                 }
@@ -131,10 +133,10 @@ struct EditableGridView: View {
                         ForEach(0..<columns.count, id: \.self) { ci in
                             TextField(rows[ri][ci] == nil ? "NULL" : "",
                                       text: binding(for: ri, ci))
-                                .font(.system(.subheadline, design: .monospaced))
+                                .font(.system(size: 12 * scale, design: .monospaced))
                                 .foregroundColor(rows[ri][ci] == nil ? .secondary : .primary)
-                                .frame(minWidth: 120, alignment: .leading)
-                                .padding(6)
+                                .frame(minWidth: 120 * scale, alignment: .leading)
+                                .padding(6 * scale)
                                 .background((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
                         }
                     }
