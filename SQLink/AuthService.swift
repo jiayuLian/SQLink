@@ -24,16 +24,26 @@ struct APIResponse<T: Decodable>: Decodable {
 struct AuthTokenData: Decodable {
     let token: String?
     let email: String?
+    let nickname: String?
     let isPro: Bool?
+    let expiresAt: String?
     let code: String?
 }
 
 struct MembershipData: Decodable {
     let email: String?
+    let nickname: String?
     let avatar: String?
     let isPro: Bool
+    let proType: String?
     let expiresAt: String?
     let remark: String?
+}
+
+/// 修改昵称 / 资料后返回的数据。
+struct ProfileData: Decodable {
+    let nickname: String?
+    let avatar: String?
 }
 
 struct AvatarData: Decodable {
@@ -60,10 +70,23 @@ final class AuthService {
         if let body = body {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        // 滑动续期：后端在 token 临近过期时会通过 x-auth-token 响应头返回新签发的 30 天 token，
+        // 前端据此刷新本地 token，活跃用户不会在 30 天到期时突然掉线。
+        if let httpResp = response as? HTTPURLResponse,
+           let newToken = httpResp.value(forHTTPHeaderField: "x-auth-token"), !newToken.isEmpty {
+            await MainActor.run { AppSettings.shared.authToken = newToken }
+        }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(APIResponse<T>.self, from: data)
+        let resp = try decoder.decode(APIResponse<T>.self, from: data)
+        // token 失效（过期 / 被服务端拒绝）：清除本地登录态，回到登录页。
+        // 这样「90 天绝对上限」触发或 token 被吊销时，用户会被平滑引导重新登录，
+        // 而不是停留在「已登录但所有请求都 401」的卡死状态。
+        if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 401 {
+            await MainActor.run { AppSettings.shared.logout() }
+        }
+        return resp
     }
 
     private func require<T>(_ resp: APIResponse<T>, extract: (T) -> Bool) async throws {
@@ -80,20 +103,20 @@ final class AuthService {
         return nil
     }
 
-    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, isPro: Bool) {
+    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, nickname: String, isPro: Bool, expiresAt: String?) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/register", body: ["email": email, "code": code, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.isPro ?? false)
+        return (token, email, d.nickname ?? "", d.isPro ?? false, d.expiresAt)
     }
 
-    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, isPro: Bool) {
+    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, nickname: String, isPro: Bool, expiresAt: String?) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/login", body: ["email": email, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.isPro ?? false)
+        return (token, email, d.nickname ?? "", d.isPro ?? false, d.expiresAt)
     }
 
     func sendResetCode(baseURL: String, email: String) async throws -> String? {
@@ -129,5 +152,18 @@ final class AuthService {
             throw AuthError.message(resp.message)
         }
         return url
+    }
+
+    /// 修改昵称。
+    func updateProfile(baseURL: String, token: String, nickname: String) async throws {
+        let resp: APIResponse<ProfileData> = try await request(baseURL: baseURL, path: "/api/user/profile", token: token, body: ["nickname": nickname])
+        if resp.code != 200 { throw AuthError.message(resp.message) }
+    }
+
+    /// 激活码兑换：凭码自助开通会员（年卡 / 永久卡），返回最新会员状态。
+    func redeemActivation(baseURL: String, token: String, code: String) async throws -> MembershipData {
+        let resp: APIResponse<MembershipData> = try await request(baseURL: baseURL, path: "/api/activation/redeem", token: token, body: ["code": code])
+        guard resp.code == 200, let data = resp.data else { throw AuthError.message(resp.message) }
+        return data
     }
 }
