@@ -73,6 +73,7 @@ struct ColumnInfo: Identifiable {
     let key: String
     let `default`: String
     let extra: String
+    let comment: String
 }
 
 enum QueryResult {

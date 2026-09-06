@@ -7,17 +7,11 @@ struct SQLinkApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if settings.isLoggedIn {
-                    TabView {
-                        ConnectionsView()
-                            .tabItem { Label("数据库", systemImage: "server.rack") }
-                        ProfileView()
-                            .tabItem { Label("我的", systemImage: "person.circle") }
-                    }
-                } else {
-                    AuthView()
-                }
+            TabView {
+                ConnectionsView()
+                    .tabItem { Label("数据库", systemImage: "server.rack") }
+                ProfileView()
+                    .tabItem { Label("我的", systemImage: "person.circle") }
             }
             .preferredColorScheme(settings.theme == .dark ? .dark : .light)
             .environmentObject(store)

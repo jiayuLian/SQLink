@@ -40,12 +40,7 @@ struct AuthView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                .padding(.bottom, 4)
-
-                Text("服务器地址：\(settings.apiBaseURL)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .padding(.bottom, 8)
+                .padding(.bottom, 8)
             }
             .navigationTitle("SQLink 账号")
             .navigationBarTitleDisplayMode(.inline)
@@ -59,7 +54,6 @@ private struct LoginForm: View {
     @State private var password = ""
     @State private var loading = false
     @State private var error: String?
-    @State private var showServerSheet = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -87,13 +81,6 @@ private struct LoginForm: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(loading || email.isEmpty || password.isEmpty)
-
-            Button("修改服务器地址") { showServerSheet = true }
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .sheet(isPresented: $showServerSheet) {
-            ServerURLSheet()
         }
     }
 
@@ -310,44 +297,6 @@ private struct ForgotPasswordForm: View {
             } catch {
                 await MainActor.run { self.error = error.localizedDescription; self.loading = false }
             }
-        }
-    }
-}
-
-struct ServerURLSheet: View {
-    @EnvironmentObject var settings: AppSettings
-    @Environment(\.dismiss) private var dismiss
-    @State private var url = ""
-
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("后端服务器地址") {
-                    TextField("https://…", text: $url)
-                        .keyboardType(.URL)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                }
-                Section {
-                    Text("默认使用你部署的 SQLink API 域名或 IP+端口。例如：https://sqlink-api.cute6696.cn")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .navigationTitle("服务器地址")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("取消") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("保存") {
-                        settings.apiBaseURL = url
-                        dismiss()
-                    }
-                }
-            }
-            .onAppear { url = settings.apiBaseURL }
         }
     }
 }

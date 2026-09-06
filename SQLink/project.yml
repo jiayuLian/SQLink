@@ -1,0 +1,61 @@
+name: SQLink
+options:
+  deploymentTarget:
+    iOS: "15.0"
+  bundleIdPrefix: com.jiayu
+  createIntermediateGroups: true
+targets:
+  SQLink:
+    type: application
+    platform: iOS
+    sources:
+      - path: SQLink/SQLinkApp.swift
+      - path: SQLink/Models.swift
+      - path: SQLink/KeychainSync.swift
+      - path: SQLink/KeychainHelper.swift
+      - path: SQLink/ConnectionStore.swift
+      - path: SQLink/MySQLWire.swift
+      - path: SQLink/MySQLConnection.swift
+      - path: SQLink/ConnectionsView.swift
+      - path: SQLink/ConnectionEditorView.swift
+      - path: SQLink/DatabaseBrowserView.swift
+      - path: SQLink/TableDetailView.swift
+      - path: SQLink/QueryConsoleView.swift
+      - path: SQLink/ProfileView.swift
+      - path: SQLink/FeedbackView.swift
+      - path: SQLink/AuthService.swift
+      - path: SQLink/AuthView.swift
+      - path: SQLink/Components.swift
+      - path: SQLink/ExportUtils.swift
+      - path: SQLink/Assets.xcassets
+    info:
+      path: SQLink/Info.plist
+      properties:
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jiayu.sqlink
+        PRODUCT_NAME: SQLink
+        INFOPLIST_FILE: SQLink/Info.plist
+        GENERATE_INFOPLIST_FILE: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+        MARKETING_VERSION: "1.0.9"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        ENABLE_BITCODE: "NO"
+        ONLY_ACTIVE_ARCH: "NO"
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+schemes:
+  SQLink:
+    build:
+      targets:
+        SQLink: all
+    run:
+      config: Release
+    archive:
+      config: Release

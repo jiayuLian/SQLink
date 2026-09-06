@@ -13,38 +13,49 @@ private func quoteValue(_ s: String) -> String {
              .replacingOccurrences(of: "'", with: "\\'") + "'"
 }
 
-private func buildWhereClause(conditions: [FilterCondition], logic: String = "AND") -> String? {
+/// 根据每个 FilterCondition 的 logic 字段拼接 WHERE。
+/// 第一个条件无前导关系；后续条件用自身的 logic 与前一项连接，
+/// 并用括号把每个条件包起来，避免 AND/OR 优先级歧义。
+private func buildWhereClause(conditions: [FilterCondition]) -> String? {
     var parts: [String] = []
     for c in conditions where c.enabled && !c.field.isEmpty {
         let f = "`\(c.field.replacingOccurrences(of: "`", with: "``"))`"
+        let sqlPart: String
         switch c.op {
-        case .equal:         parts.append("\(f) = \(quoteValue(c.value))")
-        case .notEqual:      parts.append("\(f) != \(quoteValue(c.value))")
-        case .lessThan:      parts.append("\(f) < \(quoteValue(c.value))")
-        case .lessOrEqual:   parts.append("\(f) <= \(quoteValue(c.value))")
-        case .greaterThan:   parts.append("\(f) > \(quoteValue(c.value))")
-        case .greaterOrEqual: parts.append("\(f) >= \(quoteValue(c.value))")
-        case .contains:      parts.append("\(f) LIKE '%\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'")
-        case .notContains:   parts.append("\(f) NOT LIKE '%\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'")
-        case .startsWith:    parts.append("\(f) LIKE '\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'")
-        case .notStartsWith: parts.append("\(f) NOT LIKE '\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'")
-        case .endsWith:      parts.append("\(f) LIKE '%\(quoteLikeLiteral(c.value))' ESCAPE '\\\\'")
-        case .notEndsWith:   parts.append("\(f) NOT LIKE '%\(quoteLikeLiteral(c.value))' ESCAPE '\\\\'")
-        case .isNull:        parts.append("\(f) IS NULL")
-        case .isNotNull:     parts.append("\(f) IS NOT NULL")
-        case .isEmpty:       parts.append("\(f) = ''")
-        case .isNotEmpty:    parts.append("\(f) != ''")
+        case .equal:         sqlPart = "\(f) = \(quoteValue(c.value))"
+        case .notEqual:      sqlPart = "\(f) != \(quoteValue(c.value))"
+        case .lessThan:      sqlPart = "\(f) < \(quoteValue(c.value))"
+        case .lessOrEqual:   sqlPart = "\(f) <= \(quoteValue(c.value))"
+        case .greaterThan:   sqlPart = "\(f) > \(quoteValue(c.value))"
+        case .greaterOrEqual: sqlPart = "\(f) >= \(quoteValue(c.value))"
+        case .contains:      sqlPart = "\(f) LIKE '%\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'"
+        case .notContains:   sqlPart = "\(f) NOT LIKE '%\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'"
+        case .startsWith:    sqlPart = "\(f) LIKE '\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'"
+        case .notStartsWith: sqlPart = "\(f) NOT LIKE '\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'"
+        case .endsWith:      sqlPart = "\(f) LIKE '%\(quoteLikeLiteral(c.value))' ESCAPE '\\\\'"
+        case .notEndsWith:   sqlPart = "\(f) NOT LIKE '%\(quoteLikeLiteral(c.value))' ESCAPE '\\\\'"
+        case .isNull:        sqlPart = "\(f) IS NULL"
+        case .isNotNull:     sqlPart = "\(f) IS NOT NULL"
+        case .isEmpty:       sqlPart = "\(f) = ''"
+        case .isNotEmpty:    sqlPart = "\(f) != ''"
         case .inList:
             let vals = c.value.split(separator: ",").map { quoteValue(String($0).trimmingCharacters(in: .whitespaces)) }
-            parts.append("\(f) IN (\(vals.joined(separator: ", ")))")
+            sqlPart = "\(f) IN (\(vals.joined(separator: ", ")))"
         case .notInList:
             let vals = c.value.split(separator: ",").map { quoteValue(String($0).trimmingCharacters(in: .whitespaces)) }
-            parts.append("\(f) NOT IN (\(vals.joined(separator: ", ")))")
+            sqlPart = "\(f) NOT IN (\(vals.joined(separator: ", ")))"
         case .custom:
-            if !c.value.isEmpty { parts.append(c.value) }
+            sqlPart = c.value
+        }
+        if sqlPart.isEmpty { continue }
+        if parts.isEmpty {
+            parts.append("(\(sqlPart))")
+        } else {
+            let logic = c.logic?.rawValue ?? "AND"
+            parts.append("\(logic) (\(sqlPart))")
         }
     }
-    return parts.isEmpty ? nil : parts.joined(separator: " \(logic) ")
+    return parts.isEmpty ? nil : parts.joined(separator: " ")
 }
 
 private func buildOrderBy(field: String, direction: SortDirection) -> String? {
@@ -61,6 +72,12 @@ struct TableDetailView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var rowCount: Int? = nil
+
+    // 建表 SQL 弹窗
+    @State private var showDDL = false
+    @State private var ddlText: String = ""
+    @State private var ddlLoading = false
+    @State private var ddlError: String?
 
     // filter & sort (lifted here so they persist across sheet / navigation)
     @State private var showFilter = false
@@ -91,7 +108,15 @@ struct TableDetailView: View {
                         }
                         Text("\(c.type)  \(c.null == "NO" ? "NOT NULL" : "NULL")")
                             .font(.caption).foregroundColor(.secondary)
+                        if !c.comment.isEmpty {
+                            Text("备注：\(c.comment)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
+                }
+                Button { Task { await loadDDL() } } label: {
+                    Label("查看建表 SQL", systemImage: "doc.plaintext")
                 }
             }
 
@@ -154,6 +179,49 @@ struct TableDetailView: View {
         .onChange(of: activeWhere) { _ in Task { await load() } }
         .onChange(of: activeOrderBy) { _ in Task { await load() } }
         .task { await load() }
+        .sheet(isPresented: $showDDL) {
+            NavigationView {
+                Group {
+                    if ddlLoading {
+                        ProgressView("加载中…")
+                    } else if let err = ddlError {
+                        ScrollView { Text(err).foregroundColor(.red).padding() }
+                    } else {
+                        ScrollView {
+                            Text(ddlText.isEmpty ? "（无建表语句）" : ddlText)
+                                .font(.system(.body, design: .monospaced))
+                                .padding()
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .navigationTitle("建表 SQL")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("完成") { showDDL = false }
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadDDL() async {
+        ddlLoading = true; ddlError = nil; ddlText = ""
+        do {
+            let sql = try await connection.showCreateTable(db: db, table: table)
+            await MainActor.run {
+                self.ddlText = sql
+                self.ddlLoading = false
+                self.showDDL = true
+            }
+        } catch {
+            await MainActor.run {
+                self.ddlError = error.localizedDescription
+                self.ddlLoading = false
+                self.showDDL = true
+            }
+        }
     }
 
     private var filterStatusSummary: String {
@@ -217,23 +285,13 @@ struct TableFilterView: View {
                     Button { addCondition() } label: { Label("添加筛选条件", systemImage: "plus") }
                 }
 
-                Section {
-                    Picker("多个条件之间的关系", selection: $draftFilterLogic) {
-                        ForEach(FilterLogic.allCases) { l in
-                            Text(l.label).tag(l)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("条件关系")
-                }
-
-                ForEach($draftConditions) { $condition in
+                ForEach(0..<draftConditions.count, id: \.self) { index in
                     Section {
-                        FilterConditionRow(condition: $condition,
+                        FilterConditionRow(condition: $draftConditions[index],
+                                           index: index,
                                            fields: fieldNames,
                                            db: db, table: table, connection: connection,
-                                           onDelete: { removeCondition(id: condition.id) })
+                                           onDelete: { removeCondition(at: index) })
                     }
                 }
 
@@ -267,8 +325,7 @@ struct TableFilterView: View {
                         conditions = draftConditions
                         sortField = draftSortField
                         sortDirection = draftSortDirection
-                        filterLogic = draftFilterLogic
-                        let whereClause = buildWhereClause(conditions: conditions, logic: filterLogic.rawValue)
+                        let whereClause = buildWhereClause(conditions: conditions)
                         let orderBy = buildOrderBy(field: sortField, direction: sortDirection)
                         onApply(whereClause, orderBy)
                         dismiss()
@@ -287,11 +344,12 @@ struct TableFilterView: View {
 
     private func addCondition() {
         let field = fieldNames.first ?? ""
-        draftConditions.append(FilterCondition(field: field, op: .contains, value: "", enabled: true))
+        let logic: FilterLogic? = draftConditions.isEmpty ? nil : .and
+        draftConditions.append(FilterCondition(field: field, op: .contains, value: "", enabled: true, logic: logic))
     }
 
-    private func removeCondition(id: UUID) {
-        draftConditions.removeAll { $0.id == id }
+    private func removeCondition(at index: Int) {
+        draftConditions.remove(at: index)
     }
 }
 
@@ -300,6 +358,7 @@ struct TableFilterView: View {
 /// (the previous shared `activeField`/`suggestions` design could crash on add).
 struct FilterConditionRow: View {
     @Binding var condition: FilterCondition
+    let index: Int
     let fields: [String]
     let db: String
     let table: String
@@ -309,11 +368,27 @@ struct FilterConditionRow: View {
     @State private var suggestions: [String] = []
     @State private var loadingSuggestions = false
 
+    private var logicBinding: Binding<FilterLogic> {
+        Binding<FilterLogic>(
+            get: { condition.logic ?? .and },
+            set: { condition.logic = $0 }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 8) {
                 Toggle("", isOn: $condition.enabled)
                     .labelsHidden()
+                if index > 0 {
+                    Picker("关系", selection: logicBinding) {
+                        ForEach(FilterLogic.allCases) { l in
+                            Text(l.label).tag(l)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 90)
+                }
                 Picker("字段", selection: $condition.field) {
                     ForEach(fields, id: \.self) { Text($0).tag($0) }
                 }
@@ -427,6 +502,10 @@ struct TableDataView: View {
 
     @State private var showFilter = false
 
+    // 数据表格双指缩放（0.6~3.0）；gridMagnify 为手势进行中的临时比例
+    @State private var gridScale: CGFloat = 1.0
+    @GestureState private var gridMagnify: CGFloat = 1.0
+
     // export
     // （导出分享面板改为直接 present，不再用 @State + .sheet，避免首次弹出空白）
 
@@ -464,6 +543,7 @@ struct TableDataView: View {
             }
             .onChange(of: activeWhere) { _ in page = 1; Task { await load() } }
             .onChange(of: activeOrderBy) { _ in page = 1; Task { await load() } }
+            .onChange(of: page) { _ in Task { await load() } }
             .task { await load() }
     }
 
@@ -508,11 +588,30 @@ struct TableDataView: View {
 
                     if editMode {
                         EditableGridView(columns: columns, rows: $editingValues,
-                                         originalRows: previewRows, onChange: { hasChanges = true })
+                                         originalRows: previewRows, scale: gridScale * gridMagnify,
+                                         onChange: { hasChanges = true })
                             .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(
+                                MagnificationGesture()
+                                    .updating($gridMagnify) { value, state, _ in state = value }
+                                    .onEnded { value in
+                                        gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                    }
+                            )
+                            .onTapGesture(count: 2) { gridScale = 1 }
                     } else {
-                        ResultGridView(columns: previewCols, rows: previewRows)
+                        ResultGridView(columns: previewCols, rows: previewRows, scale: gridScale * gridMagnify)
                             .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(
+                                MagnificationGesture()
+                                    .updating($gridMagnify) { value, state, _ in state = value }
+                                    .onEnded { value in
+                                        gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                    }
+                            )
+                            .onTapGesture(count: 2) { gridScale = 1 }
                     }
 
                     if let saveMessage = saveMessage {
@@ -538,6 +637,12 @@ struct TableDataView: View {
                         } } label: {
                             Label("\(settings.pageSize) 条/页", systemImage: "line.3.horizontal")
                                 .font(.caption)
+                        }
+                        if gridScale != 1 {
+                            Button { gridScale = 1 } label: {
+                                Label("\(Int(gridScale * 100))%", systemImage: "arrow.counterclockwise")
+                                    .font(.caption)
+                            }
                         }
                     }
                     .padding(.horizontal, 10).padding(.vertical, 8)
@@ -584,38 +689,51 @@ struct TableDataView: View {
         }
     }
 
+    /// 连接断开（写入数据失败 / 被服务器关闭）时自动重连一次再重试，避免「点击查看数据却报写入失败」。
+    private func withReconnect<T>(_ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch let e as MySQLError where e.isDeadConnection {
+            try await connection.reconnect()
+            return try await body()
+        }
+    }
+
     private func load() async {
         loading = true; error = nil
         do {
-            let pageSize = max(1, settings.pageSize)
-            // 先取真实总数，用于免费版浏览上限判断
-            let raw = try await connection.countRows(db: db, table: table, whereClause: activeWhere)
-            let viewLimit = settings.isPro ? Int.max : settings.plan.freeViewLimit
-            let displayTotal = min(raw, viewLimit)
-            let computedMaxPage = max(1, Int(ceil(Double(displayTotal) / Double(pageSize))))
-            let safePage = min(max(1, page), computedMaxPage)
-            if safePage != page { await MainActor.run { page = safePage } }
-            let offset = (safePage - 1) * pageSize
-
-            async let cols = connection.listColumns(db: db, table: table)
-            async let prev = connection.fetchRows(db: db, table: table, limit: pageSize, offset: offset,
-                                                 whereClause: activeWhere, orderBy: activeOrderBy)
-            let c = try await cols
-            let p = try await prev
-            var pc = [ColumnDef](); var pr = [[String?]]()
-            if case .result(let cc, let rr) = p { pc = cc; pr = rr }
-            await MainActor.run {
-                self.columns = c
-                self.previewCols = pc
-                self.previewRows = pr
-                self.rawCount = raw
-                self.rowCount = displayTotal
-            }
+            try await fetchData()
         } catch {
-            let msg = error.localizedDescription
-            await MainActor.run { self.error = msg }
+            await MainActor.run { self.error = error.localizedDescription }
         }
         await MainActor.run { loading = false }
+    }
+
+    private func fetchData() async throws {
+        let pageSize = max(1, settings.pageSize)
+        // 先取真实总数，用于免费版浏览上限判断
+        let raw = try await withReconnect { try await connection.countRows(db: db, table: table, whereClause: activeWhere) }
+        let viewLimit = settings.isPro ? Int.max : settings.plan.freeViewLimit
+        let displayTotal = min(raw, viewLimit)
+        let computedMaxPage = max(1, Int(ceil(Double(displayTotal) / Double(pageSize))))
+        let safePage = min(max(1, page), computedMaxPage)
+        if safePage != page { await MainActor.run { page = safePage } }
+        let offset = (safePage - 1) * pageSize
+
+        async let cols = withReconnect { try await connection.listColumns(db: db, table: table) }
+        async let prev = withReconnect { try await connection.fetchRows(db: db, table: table, limit: pageSize, offset: offset,
+                                                 whereClause: activeWhere, orderBy: activeOrderBy) }
+        let c = try await cols
+        let p = try await prev
+        var pc = [ColumnDef](); var pr = [[String?]]()
+        if case .result(let cc, let rr) = p { pc = cc; pr = rr }
+        await MainActor.run {
+            self.columns = c
+            self.previewCols = pc
+            self.previewRows = pr
+            self.rawCount = raw
+            self.rowCount = displayTotal
+        }
     }
 
     private func exportAs(_ format: ExportFormat) {
@@ -691,7 +809,7 @@ struct TableDataView: View {
                 guard !sets.isEmpty else { continue }
                 let pkVal = quoteValue(previewRows[ri][pkIndex] ?? "")
                 let sql = "UPDATE `\(db.replacingOccurrences(of: "`", with: "``"))`.`\(table.replacingOccurrences(of: "`", with: "``"))` SET \(sets.joined(separator: ", ")) WHERE `\(pk.replacingOccurrences(of: "`", with: "``"))` = \(pkVal) LIMIT 1"
-                _ = try await connection.query(sql)
+                _ = try await withReconnect { try await connection.query(sql) }
             }
             await MainActor.run {
                 saveMessage = "保存成功"

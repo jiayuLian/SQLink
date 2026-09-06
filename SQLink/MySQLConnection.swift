@@ -35,6 +35,14 @@ final class MySQLConnection {
         try await run { try self._connect(password: password) }
     }
 
+    /// 连接断开后重建连接（密码从 Keychain 取回）。用于查询时检测到死连接后的自动重连。
+    func reconnect() async throws {
+        close()
+        sequence = 0
+        let pw = KeychainHelper.load(for: profile.id) ?? ""
+        try await run { try self._connect(password: pw) }
+    }
+
     func query(_ sql: String) async throws -> QueryResult {
         try await run { try self._query(sql) }
     }
@@ -60,20 +68,31 @@ final class MySQLConnection {
 
     func listColumns(db: String, table: String) async throws -> [ColumnInfo] {
         try await run {
-            // NOTE: use plain SHOW COLUMNS (not FULL) so column indices match:
-            // 0 Field, 1 Type, 2 Null, 3 Key, 4 Default, 5 Extra
-            let r = try self._query("SHOW COLUMNS FROM `\(self.esc(db))`.`\(self.esc(table))`")
+            // SHOW FULL COLUMNS 包含 COMMENT（第 8 列），索引映射：
+            // 0 Field, 1 Type, 2 Collation, 3 Null, 4 Key, 5 Default, 6 Extra, 7 Privileges, 8 Comment
+            let r = try self._query("SHOW FULL COLUMNS FROM `\(self.esc(db))`.`\(self.esc(table))`")
             guard case .result(_, let rows) = r else { return [] }
             return rows.map { row in
                 ColumnInfo(
                     field: row[0] ?? "",
                     type: row[1] ?? "",
-                    null: row[2] ?? "",
-                    key: row[3] ?? "",
-                    default: row[4] ?? "",
-                    extra: row[5] ?? ""
+                    null: row[3] ?? "",
+                    key: row[4] ?? "",
+                    default: row[5] ?? "",
+                    extra: row[6] ?? "",
+                    comment: row[8] ?? ""
                 )
             }
+        }
+    }
+
+    /// 返回建表语句（SHOW CREATE TABLE 的第二条）。用于「查看建表 SQL」。
+    func showCreateTable(db: String, table: String) async throws -> String {
+        try await run {
+            let r = try self._query("SHOW CREATE TABLE `\(self.esc(db))`.`\(self.esc(table))`")
+            guard case .result(_, let rows) = r, let row = rows.first else { return "" }
+            // 第 1 列是 CREATE TABLE 语句（第 0 列为表名）
+            return row.count > 1 ? (row[1] ?? "") : (row.first ?? "")
         }
     }
 
