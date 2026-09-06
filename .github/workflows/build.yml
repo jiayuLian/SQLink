@@ -60,7 +60,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=v1.0.4
+          TAG=v1.0.5
           REL=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
           REL_ID=$(echo "$REL" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])" 2>/dev/null || true)
           if [ -n "$REL_ID" ]; then
@@ -73,12 +73,16 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.4
-          name: SQLink v1.0.4
+          tag_name: v1.0.5
+          name: SQLink v1.0.5
           files: SQLink.ipa
           fail_on_unmatched_files: false
           body: |
-            ## SQLink v1.0.4
+            ## SQLink v1.0.5
+
+            ### 本次更新
+            - 会员状态与登录态自动同步到 iCloud 钥匙串：换手机 / 卸载重装（同一 Apple ID）后自动恢复会员，无需重新登录（需开启 iCloud 钥匙串）
+            - 移除「我的」页「刷新会员状态」手动按钮，改为冷启动 / 登录态变化时静默同步（本地优先，断网或服务器到期不影响已付费会员使用）
 
             ### 账号与会员
             - 邮箱账号体系：注册、登录、找回密码，会员状态由后端决定

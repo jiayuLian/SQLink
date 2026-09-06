@@ -4,8 +4,6 @@ import SwiftUI
 struct ProfileView: View {
     @EnvironmentObject var settings: AppSettings
     @State private var showCopied = false
-    @State private var refreshing = false
-    @State private var refreshError: String?
     @State private var showServerSheet = false
     @State private var showLogoutConfirm = false
     @State private var showImagePicker = false
@@ -78,16 +76,6 @@ struct ProfileView: View {
                     }
                     if let err = avatarError {
                         Text(err).font(.caption).foregroundColor(.red)
-                    }
-                    HStack {
-                        Button { refreshMembership() } label: {
-                            Label(refreshing ? "刷新中…" : "刷新会员状态", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(refreshing)
-                        Spacer()
-                        if let err = refreshError {
-                            Text(err).font(.caption).foregroundColor(.red)
-                        }
                     }
                     Button { showServerSheet = true } label: { Label("服务器地址", systemImage: "network") }
                     Button(role: .destructive) { showLogoutConfirm = true } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
@@ -165,29 +153,6 @@ struct ProfileView: View {
     private func copyWeChat() {
         UIPasteboard.general.string = authorWeChat
         showCopied = true
-    }
-
-    private func refreshMembership() {
-        refreshing = true; refreshError = nil
-        Task {
-            do {
-                let data = try await AuthService.shared.fetchMembership(baseURL: settings.apiBaseURL, token: settings.authToken)
-                await MainActor.run {
-                    if let email = data.email { settings.authEmail = email }
-                    if let nickname = data.nickname { settings.nickname = nickname }
-                    settings.isPro = data.isPro
-                    settings.proExpiresAt = data.expiresAt ?? ""
-                    settings.avatarURL = data.avatar ?? ""
-                    refreshing = false
-                }
-            } catch {
-                await MainActor.run {
-                    settings.isPro = settings.resolveProFallback()
-                    refreshError = error.localizedDescription
-                    refreshing = false
-                }
-            }
-        }
     }
 
     private func saveNickname() {
@@ -377,6 +342,8 @@ struct ActivationSheet: View {
                     settings.isPro = data.isPro
                     settings.proExpiresAt = data.expiresAt ?? ""
                     if let nickname = data.nickname { settings.nickname = nickname }
+                    // 兑换成功后把最新会员状态固化到 iCloud Keychain（抗卸载/换机恢复）。
+                    settings.syncCredentialsToKeychain()
                     success = true
                     activating = false
                     message = data.proType == "lifetime" ? "激活成功，已开通永久会员！" : "激活成功，已开通年卡会员！"

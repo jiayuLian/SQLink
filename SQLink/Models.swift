@@ -256,6 +256,8 @@ final class AppSettings: ObservableObject {
         } else {
             self.plan = .default
         }
+        // 抗卸载：本机无登录态时，尝试从 iCloud Keychain 恢复（重装/换机，同 Apple ID）。
+        restoreFromKeychainIfNeeded()
     }
 
     var isLoggedIn: Bool { !authToken.isEmpty || guestMode }
@@ -268,6 +270,8 @@ final class AppSettings: ObservableObject {
         proExpiresAt = ""
         guestMode = false
         isPro = false
+        // 清除 iCloud Keychain 中的凭证，彻底登出（换机/重装后也不再自动恢复）。
+        KeychainSync.clearAll()
     }
 
     func enterGuestMode() {
@@ -284,6 +288,33 @@ final class AppSettings: ObservableObject {
         self.isPro = isPro
         self.nickname = nickname
         self.proExpiresAt = expiresAt
+        // 登录/注册成功后立即把登录态与会员状态固化到 iCloud Keychain，
+        // 使重装 / 换机（同 Apple ID）可自动恢复，无需重新登录。
+        syncCredentialsToKeychain()
+    }
+
+    /// 将当前登录态与会员状态同步到 iCloud Keychain（同 Apple ID 设备抗卸载/换机恢复）。
+    /// 若 iCloud 钥匙串不可用则静默失败，不影响主流程。仅在已登录时有意义。
+    func syncCredentialsToKeychain() {
+        guard !authToken.isEmpty else { return }
+        KeychainSync.save(authToken, for: KeychainSync.authTokenKey)
+        KeychainSync.save(authEmail, for: KeychainSync.authEmailKey)
+        KeychainSync.save(nickname, for: KeychainSync.nicknameKey)
+        KeychainSync.save(proExpiresAt, for: KeychainSync.proExpiresAtKey)
+        KeychainSync.save(isPro ? "1" : "0", for: KeychainSync.isProKey)
+    }
+
+    /// 启动 / 重装 / 换机时，从 iCloud Keychain 恢复登录态与会员状态。
+    /// 仅当本机 UserDefaults 没有登录态（即首次安装或卸载重装）时才尝试，
+    /// 避免覆盖本机已有的有效会话。
+    private func restoreFromKeychainIfNeeded() {
+        guard authToken.isEmpty else { return }
+        guard let token = KeychainSync.read(KeychainSync.authTokenKey), !token.isEmpty else { return }
+        self.authToken = token
+        self.authEmail = KeychainSync.read(KeychainSync.authEmailKey) ?? ""
+        self.nickname = KeychainSync.read(KeychainSync.nicknameKey) ?? ""
+        self.proExpiresAt = KeychainSync.read(KeychainSync.proExpiresAtKey) ?? ""
+        self.isPro = KeychainSync.read(KeychainSync.isProKey) == "1"
     }
 
     /// 服务器不可达兜底：本地缓存判断会员是否仍有效。
