@@ -44,6 +44,10 @@ struct QueryConsoleView: View {
 
     @State private var lastExecutedSQL: String? = nil
 
+    /// 查询结果表格双指缩放（外滑放大、内滑缩小，双击复位）。
+    @State private var gridScale: CGFloat = 1.0
+    @GestureState private var gridMagnify: CGFloat = 1.0
+
     private var currentDB: String? { db }
 
     /// 按「数据库 + 表」分别记忆上次输入的 SQL（自动保存开关控制）。
@@ -187,13 +191,32 @@ struct QueryConsoleView: View {
                             Text("运行 SQL 后在此显示结果").foregroundColor(.secondary).padding(.top, 40)
                         } else if editMode {
                             EditableGridView(columns: editColumns, rows: $editingRows,
-                                             originalRows: rows, onChange: { hasChanges = true })
+                                             originalRows: rows, scale: gridScale * gridMagnify,
+                                             onChange: { hasChanges = true })
                                 .frame(height: 320)
                                 .padding(.horizontal, 8)
+                                .contentShape(Rectangle())
+                                .simultaneousGesture(
+                                    MagnificationGesture()
+                                        .updating($gridMagnify) { value, state, _ in state = value }
+                                        .onEnded { value in
+                                            gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                        }
+                                )
+                                .onTapGesture(count: 2) { gridScale = 1 }
                         } else {
-                            ResultGridView(columns: columns, rows: rows)
+                            ResultGridView(columns: columns, rows: rows, scale: gridScale * gridMagnify)
                                 .frame(height: 320)
                                 .padding(.horizontal, 8)
+                                .contentShape(Rectangle())
+                                .simultaneousGesture(
+                                    MagnificationGesture()
+                                        .updating($gridMagnify) { value, state, _ in state = value }
+                                        .onEnded { value in
+                                            gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                        }
+                                )
+                                .onTapGesture(count: 2) { gridScale = 1 }
                         }
                         Color.clear.frame(height: 30).id("resultBottom")
                     }

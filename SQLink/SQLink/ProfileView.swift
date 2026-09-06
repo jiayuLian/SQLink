@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 「我的」页面：账号、外观、查询设置、反馈与帮助、关于。
+/// 「我的」页面：账号、外观、反馈与帮助、关于。
 /// 登录态非强制：未登录时仅显示登录入口；点击头像/账号可跳转登录或选择头像。
 struct ProfileView: View {
     @EnvironmentObject var settings: AppSettings
@@ -23,6 +23,9 @@ struct ProfileView: View {
                 Section("账号") {
                     HStack(spacing: 14) {
                         AvatarView(urlString: settings.avatarURL, size: 56)
+                            .frame(width: 56, height: 56)
+                            .contentShape(Circle())
+                            .onTapGesture { avatarOrLogin() }   // 已登录→相册选头像；未登录→登录页
                         VStack(alignment: .leading, spacing: 4) {
                             if settings.isLoggedIn {
                                 Text(displayName)
@@ -38,10 +41,10 @@ struct ProfileView: View {
                                 Text("点击登录 / 注册").font(.caption).foregroundColor(.secondary)
                             }
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture { if !settings.isLoggedIn { showLogin = true } }  // 进入登录/注册/找回密码
                         Spacer()
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture { avatarOrLogin() }
 
                     if settings.isLoggedIn {
                         HStack {
@@ -62,13 +65,6 @@ struct ProfileView: View {
                         if let err = avatarError {
                             Text(err).font(.caption).foregroundColor(.red)
                         }
-                        Button(role: .destructive) { confirmLogout = true } label: {
-                            Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
-                    } else {
-                        Button { showLogin = true } label: {
-                            Label("登录 / 注册", systemImage: "person.crop.circle.badge.plus")
-                        }
                     }
                 }
 
@@ -80,16 +76,6 @@ struct ProfileView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                }
-
-                // 3. 查询设置
-                Section("查询设置") {
-                    Toggle("自动保存上次 SQL（按数据表分别记忆）", isOn: $settings.autoSaveSQL)
-                    Picker("默认每页显示条数", selection: $settings.pageSize) {
-                        ForEach([50, 100, 200, 500], id: \.self) { s in
-                            Text("\(s) 条").tag(s)
-                        }
-                    }
                 }
 
                 // 4. 反馈与帮助
@@ -125,12 +111,6 @@ struct ProfileView: View {
                     uploadAvatar(image)
                 }
             }
-            .alert("确认退出", isPresented: $confirmLogout) {
-                Button("取消", role: .cancel) {}
-                Button("退出", role: .destructive) { settings.logout() }
-            } message: {
-                Text("退出后将回到未登录状态")
-            }
             .alert("已复制", isPresented: $showCopied) {
                 Button("确定") {}
             } message: {
@@ -138,8 +118,6 @@ struct ProfileView: View {
             }
         }
     }
-
-    @State private var confirmLogout = false
 
     private var proLabel: String {
         settings.proExpiresAt.isEmpty ? "永久会员" : "会员版"
