@@ -4,9 +4,6 @@ import SwiftUI
 struct ProfileView: View {
     @EnvironmentObject var settings: AppSettings
     @State private var showCopied = false
-    @State private var showQRSheet = false
-    @State private var qrImageName = ""
-    @State private var qrTitle = ""
     @State private var refreshing = false
     @State private var refreshError: String?
     @State private var showServerSheet = false
@@ -14,9 +11,16 @@ struct ProfileView: View {
     @State private var showImagePicker = false
     @State private var uploading = false
     @State private var avatarError: String?
+    @State private var editingNickname = false
+    @State private var nicknameDraft = ""
+    @State private var showActivationSheet = false
+    @State private var activationCode = ""
+    @State private var activating = false
+    @State private var activationMessage: String?
 
     private let appDownloadURL = "https://github.com/jiayuLian/SQLink/releases/tag/v1.0.4"
     private let authorWeChat = "cute6697"
+    private let authorEmail = "lianjiayu998@163.com"
 
     var body: some View {
         NavigationView {
@@ -43,7 +47,7 @@ struct ProfileView: View {
                     HStack(spacing: 14) {
                         AvatarView(urlString: settings.avatarURL, size: 56)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(settings.authEmail.isEmpty ? "未登录" : settings.authEmail)
+                            Text(displayName)
                                 .font(.subheadline)
                                 .lineLimit(1)
                             Button { showImagePicker = true } label: {
@@ -53,6 +57,24 @@ struct ProfileView: View {
                             .disabled(uploading)
                         }
                         Spacer()
+                    }
+                    HStack {
+                        Text("昵称")
+                        Spacer()
+                        if editingNickname {
+                            TextField("昵称", text: $nicknameDraft)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 180)
+                            Button("保存") { saveNickname() }
+                                .font(.caption)
+                            Button("取消") { editingNickname = false; nicknameDraft = settings.nickname }
+                                .font(.caption)
+                        } else {
+                            Text(settings.nickname.isEmpty ? "未设置" : settings.nickname)
+                                .foregroundColor(.secondary)
+                            Button("编辑") { nicknameDraft = settings.nickname; editingNickname = true }
+                                .font(.caption)
+                        }
                     }
                     if let err = avatarError {
                         Text(err).font(.caption).foregroundColor(.red)
@@ -79,25 +101,30 @@ struct ProfileView: View {
                             .foregroundColor(.secondary)
                     }
                     if !settings.isPro {
-                        // 价格来自后端配置（settings.plan），可随时调整，无需发版
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text("开通会员").font(.subheadline).fontWeight(.medium)
-                            Spacer()
-                            Text("\(settings.plan.currency)\(settings.plan.proPriceYearly)/年 或 \(settings.plan.currency)\(settings.plan.proPriceLifetime)永久")
-                                .font(.subheadline).foregroundColor(.accentColor)
-                        }
-                        Text("免费版权益：查看上限 \(settings.plan.freeViewLimit) 条、导出上限 \(settings.plan.freeExportLimit) 条；数据编辑、全量导出、无限查看需会员。")
+                        // App Store 合规：仅描述会员权益，不展示价格、不提供任何付款入口/收款码/外链。
+                        // 会员通过在 App 外获取激活码后在下方「使用激活码」自助开通。
+                        Text("会员专享：数据表编辑、全量数据查看与导出、无条数限制。")
                             .font(.caption).foregroundColor(.secondary)
-                        Button { showQR(name: "wechat_add_qr", title: "添加作者微信") } label: { Label("添加作者微信", systemImage: "qrcode") }
-                        Button { showQR(name: "wechat_pay_qr", title: "微信支付收款码") } label: { Label("扫码开通会员", systemImage: "dollarsign.circle") }
+                        Button { showActivationSheet = true } label: { Label("使用激活码开通会员", systemImage: "key") }
+                        Button { copyWeChat() } label: { Label("联系客服（微信号：\(authorWeChat)）", systemImage: "bubble.left") }
+                            .alert("已复制", isPresented: $showCopied) {
+                                Button("确定") {}
+                            } message: { Text("微信号 \(authorWeChat) 已复制到剪贴板，添加时请备注你的 App 昵称或注册邮箱，便于核对问题") }
+                        if let mailURL = URL(string: "mailto:\(authorEmail)") {
+                            Link("联系作者（邮箱：\(authorEmail)）", destination: mailURL)
+                        }
                     } else {
                         Text("你当前已是会员，全部功能已开放。感谢支持！")
                             .font(.caption).foregroundColor(.secondary)
+                        Button { showActivationSheet = true } label: { Label("使用激活码", systemImage: "key") }
+                        Button { copyWeChat() } label: { Label("联系客服（微信号：\(authorWeChat)）", systemImage: "bubble.left") }
+                            .alert("已复制", isPresented: $showCopied) {
+                                Button("确定") {}
+                            } message: { Text("微信号 \(authorWeChat) 已复制到剪贴板，添加时请备注你的 App 昵称或注册邮箱，便于核对问题") }
+                        if let mailURL = URL(string: "mailto:\(authorEmail)") {
+                            Link("联系作者（邮箱：\(authorEmail)）", destination: mailURL)
+                        }
                     }
-                    Button { copyWeChat() } label: { Label("复制微信号：\(authorWeChat)", systemImage: "doc.on.doc") }
-                        .alert("已复制", isPresented: $showCopied) {
-                            Button("确定") {}
-                        } message: { Text("微信号 \(authorWeChat) 已复制到剪贴板") }
                 }
 
                 Section("分享") {
@@ -115,9 +142,6 @@ struct ProfileView: View {
             }
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $showQRSheet) {
-                QRCodeSheet(imageName: qrImageName, title: qrTitle)
-            }
             .sheet(isPresented: $showServerSheet) {
                 ServerURLSheet()
             }
@@ -125,6 +149,9 @@ struct ProfileView: View {
                 ImagePicker(sourceType: .photoLibrary) { image in
                     uploadAvatar(image)
                 }
+            }
+            .sheet(isPresented: $showActivationSheet) {
+                ActivationSheet()
             }
             .alert("确认退出", isPresented: $showLogoutConfirm) {
                 Button("取消", role: .cancel) {}
@@ -140,12 +167,6 @@ struct ProfileView: View {
         showCopied = true
     }
 
-    private func showQR(name: String, title: String) {
-        qrImageName = name
-        qrTitle = title
-        showQRSheet = true
-    }
-
     private func refreshMembership() {
         refreshing = true; refreshError = nil
         Task {
@@ -153,14 +174,41 @@ struct ProfileView: View {
                 let data = try await AuthService.shared.fetchMembership(baseURL: settings.apiBaseURL, token: settings.authToken)
                 await MainActor.run {
                     if let email = data.email { settings.authEmail = email }
+                    if let nickname = data.nickname { settings.nickname = nickname }
                     settings.isPro = data.isPro
+                    settings.proExpiresAt = data.expiresAt ?? ""
                     settings.avatarURL = data.avatar ?? ""
                     refreshing = false
                 }
             } catch {
-                await MainActor.run { refreshError = error.localizedDescription; refreshing = false }
+                await MainActor.run {
+                    settings.isPro = settings.resolveProFallback()
+                    refreshError = error.localizedDescription
+                    refreshing = false
+                }
             }
         }
+    }
+
+    private func saveNickname() {
+        let trimmed = nicknameDraft.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { editingNickname = false; return }
+        Task {
+            do {
+                try await AuthService.shared.updateProfile(baseURL: settings.apiBaseURL, token: settings.authToken, nickname: trimmed)
+                await MainActor.run {
+                    settings.nickname = trimmed
+                    editingNickname = false
+                }
+            } catch {
+                await MainActor.run { activationMessage = error.localizedDescription }
+            }
+        }
+    }
+
+    private var displayName: String {
+        if !settings.nickname.isEmpty { return settings.nickname }
+        return settings.authEmail.isEmpty ? "未登录" : settings.authEmail
     }
 
     private func uploadAvatar(_ image: UIImage) {
@@ -266,60 +314,81 @@ extension UIImage {
     }
 }
 
-/// 二维码大图 + 长按保存到相册。
-struct QRCodeSheet: View {
-    let imageName: String
-    let title: String
+/// 激活码兑换弹窗：用户输入激活码，调用后端兑换 Pro 会员（年卡 / 永久卡）。
+struct ActivationSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var showSaved = false
+    @EnvironmentObject var settings: AppSettings
+    @State private var code = ""
+    @State private var activating = false
+    @State private var message: String?
+    @State private var success = false
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 24) {
-                Text("截图或长按保存到相册，然后在微信中识别")
+            VStack(spacing: 20) {
+                Text("输入激活码即可开通会员（支持年卡与永久卡）。")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.top, 16)
-
-                Image(imageName)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: 280, maxHeight: 280)
-                    .cornerRadius(12)
-                    .contextMenu {
-                        Button { saveImage() } label: { Label("保存到相册", systemImage: "square.and.arrow.down") }
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                TextField("激活码（如 SQLINK-Y-XXXX-XXXX）", text: $code)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .padding(.horizontal)
+                if let message = message {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(success ? .accentColor : .red)
+                        .padding(.horizontal)
+                        .multilineTextAlignment(.center)
+                }
+                Button { redeem() } label: {
+                    if activating {
+                        ProgressView()
+                    } else {
+                        Label("激活", systemImage: "key")
                     }
-                    .onLongPressGesture {
-                        saveImage()
-                    }
-
-                Text("微信号：cute6697")
-                    .font(.headline)
-
+                }
+                .disabled(code.trimmingCharacters(in: .whitespaces).isEmpty || activating)
                 Spacer()
             }
-            .padding()
-            .navigationTitle(title)
+            .navigationTitle("激活会员")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("完成") { dismiss() }
                 }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button { saveImage() } label: { Label("保存", systemImage: "square.and.arrow.down") }
-                }
-            }
-            .alert("已保存", isPresented: $showSaved) {
-                Button("确定") {}
-            } message: {
-                Text("二维码已保存到相册")
             }
         }
     }
 
-    private func saveImage() {
-        guard let uiImage = UIImage(named: imageName) else { return }
-        UIImageWriteToSavedPhotosAlbum(uiImage, nil, nil, nil)
-        showSaved = true
+    private func redeem() {
+        activating = true; message = nil
+        Task {
+            do {
+                let data = try await AuthService.shared.redeemActivation(
+                    baseURL: settings.apiBaseURL,
+                    token: settings.authToken,
+                    code: code
+                )
+                await MainActor.run {
+                    settings.isPro = data.isPro
+                    settings.proExpiresAt = data.expiresAt ?? ""
+                    if let nickname = data.nickname { settings.nickname = nickname }
+                    success = true
+                    activating = false
+                    message = data.proType == "lifetime" ? "激活成功，已开通永久会员！" : "激活成功，已开通年卡会员！"
+                }
+            } catch {
+                await MainActor.run {
+                    success = false
+                    message = error.localizedDescription
+                    activating = false
+                }
+            }
+        }
     }
+}
 }
