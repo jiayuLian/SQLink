@@ -23,6 +23,14 @@ enum MySQLError: Error, LocalizedError {
         case .protocolError(let m): return "协议错误：\(m)"
         }
     }
+
+    /// 连接已断开（socket 写失败 / 被服务器关闭），可尝试自动重连。
+    var isDeadConnection: Bool {
+        switch self {
+        case .writeError, .connectionClosed: return true
+        default: return false
+        }
+    }
 }
 
 // MARK: - Connection profile (password lives in Keychain, never here)
@@ -120,7 +128,7 @@ enum SortDirection: String, CaseIterable, Codable, Identifiable {
     var label: String { self == .asc ? "升序" : "降序" }
 }
 
-enum FilterLogic: String, CaseIterable, Identifiable {
+enum FilterLogic: String, CaseIterable, Identifiable, Codable, Hashable {
     case and = "AND"
     case or = "OR"
     var id: String { rawValue }
@@ -133,6 +141,8 @@ struct FilterCondition: Identifiable, Codable, Hashable {
     var op: FilterOperator = .contains
     var value: String = ""
     var enabled: Bool = true
+    /// 本条条件与前一条条件之间的逻辑关系（AND/OR）。第一条为 nil。
+    var logic: FilterLogic? = nil
 }
 
 // MARK: - MySQL data type names (subset, enough for display)
@@ -207,6 +217,13 @@ final class AppSettings: ObservableObject {
     @Published var avatarURL: String {
         didSet { UserDefaults.standard.set(avatarURL, forKey: "sqlink.avatarURL") }
     }
+    @Published var nickname: String {
+        didSet { UserDefaults.standard.set(nickname, forKey: "sqlink.nickname") }
+    }
+    /// 会员到期时间（ISO 字符串）。用于「服务器不可达」兜底：本地缓存判断会员是否仍在有效期。
+    @Published var proExpiresAt: String {
+        didSet { UserDefaults.standard.set(proExpiresAt, forKey: "sqlink.proExpiresAt") }
+    }
     @Published var guestMode: Bool {
         didSet { UserDefaults.standard.set(guestMode, forKey: "sqlink.guestMode") }
     }
@@ -229,6 +246,8 @@ final class AppSettings: ObservableObject {
         self.authToken = d.string(forKey: "sqlink.authToken") ?? ""
         self.authEmail = d.string(forKey: "sqlink.authEmail") ?? ""
         self.avatarURL = d.string(forKey: "sqlink.avatarURL") ?? ""
+        self.nickname = d.string(forKey: "sqlink.nickname") ?? ""
+        self.proExpiresAt = d.string(forKey: "sqlink.proExpiresAt") ?? ""
         self.guestMode = (d.object(forKey: "sqlink.guestMode") as? Bool) ?? false
         if let pd = d.data(forKey: "sqlink.plan"),
            let p = try? JSONDecoder().decode(PlanConfig.self, from: pd) {
@@ -244,6 +263,8 @@ final class AppSettings: ObservableObject {
         authToken = ""
         authEmail = ""
         avatarURL = ""
+        nickname = ""
+        proExpiresAt = ""
         guestMode = false
         isPro = false
     }
@@ -255,11 +276,30 @@ final class AppSettings: ObservableObject {
         isPro = false
     }
 
-    func applyMembership(_ email: String, token: String, isPro: Bool) {
+    func applyMembership(_ email: String, token: String, isPro: Bool, nickname: String = "", expiresAt: String = "") {
         self.authEmail = email
         self.authToken = token
         self.guestMode = false
         self.isPro = isPro
+        self.nickname = nickname
+        self.proExpiresAt = expiresAt
+    }
+
+    /// 服务器不可达兜底：本地缓存判断会员是否仍有效。
+    /// 年卡：未过期则维持 Pro；永久（proExpiresAt 为空）且本地 isPro 为真则维持 Pro；其余降级免费。
+    func resolveProFallback() -> Bool {
+        guard isPro else { return false }
+        if proExpiresAt.isEmpty { return true } // lifetime
+        guard let exp = ISO8601DateFormatter().date(from: proExpiresAt)
+                ?? dateFromMySQL(proExpiresAt) else { return true }
+        return exp > Date()
+    }
+
+    private func dateFromMySQL(_ s: String) -> Date? {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        return f.date(from: s)
     }
 
     /// 拉取后端公共配置（免费额度 + 价格），失败则保留本地缓存。
@@ -274,18 +314,13 @@ final class AppSettings: ObservableObject {
 }
 
 /// 后端返回的公开配置（字段与 /api/public/config 的 snake_case 对应）。
+/// 仅保留功能所需字段（免费版行数门禁）。价格等付费信息不进入客户端，避免触发 App Store 3.1.1 反引导审核。
 struct PlanConfig: Codable {
     var freeExportLimit: Int
     var freeViewLimit: Int
-    var proPriceYearly: Int
-    var proPriceLifetime: Int
-    var currency: String
 
     static let `default` = PlanConfig(
         freeExportLimit: 100,
-        freeViewLimit: 100,
-        proPriceYearly: 68,
-        proPriceLifetime: 98,
-        currency: "¥"
+        freeViewLimit: 100
     )
 }
