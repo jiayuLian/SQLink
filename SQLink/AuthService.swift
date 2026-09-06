@@ -50,6 +50,9 @@ struct AvatarData: Decodable {
     let url: String?
 }
 
+/// 反馈提交成功时后端不返回业务数据，仅 code/message。
+struct EmptyData: Decodable {}
+
 final class AuthService {
     static let shared = AuthService()
     private init() {}
@@ -165,5 +168,11 @@ final class AuthService {
         let resp: APIResponse<MembershipData> = try await request(baseURL: baseURL, path: "/api/activation/redeem", token: token, body: ["code": code])
         guard resp.code == 200, let data = resp.data else { throw AuthError.message(resp.message) }
         return data
+    }
+
+    /// 提交意见反馈：content 必填，contact 选填；后端按账号 + IP 双重限流防爆破。
+    func submitFeedback(baseURL: String, token: String, content: String, contact: String) async throws {
+        let resp: APIResponse<EmptyData> = try await request(baseURL: baseURL, path: "/api/feedback", token: token, body: ["content": content, "contact": contact])
+        if resp.code != 200 { throw AuthError.message(resp.message) }
     }
 }

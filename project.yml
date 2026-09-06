@@ -22,6 +22,7 @@ targets:
       - path: SQLink/TableDetailView.swift
       - path: SQLink/QueryConsoleView.swift
       - path: SQLink/ProfileView.swift
+      - path: SQLink/FeedbackView.swift
       - path: SQLink/AuthService.swift
       - path: SQLink/AuthView.swift
       - path: SQLink/Components.swift
@@ -40,7 +41,7 @@ targets:
         CODE_SIGNING_ALLOWED: "NO"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: ""
-        MARKETING_VERSION: "1.0.5"
+        MARKETING_VERSION: "1.0.6"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
         ENABLE_BITCODE: "NO"

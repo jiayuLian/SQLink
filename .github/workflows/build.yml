@@ -60,7 +60,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=v1.0.5
+          TAG=v1.0.6
           REL=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
           REL_ID=$(echo "$REL" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])" 2>/dev/null || true)
           if [ -n "$REL_ID" ]; then
@@ -73,14 +73,15 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.5
-          name: SQLink v1.0.5
+          tag_name: v1.0.6
+          name: SQLink v1.0.6
           files: SQLink.ipa
           fail_on_unmatched_files: false
           body: |
-            ## SQLink v1.0.5
+            ## SQLink v1.0.6
 
             ### 本次更新
+            - 新增「意见反馈」入口（「我的」→「反馈与帮助」）：可提交文字反馈与选填联系方式；后端按账号 + IP 双重限流防爆破（账号 5 次/小时、IP 20 次/小时）
             - 会员状态与登录态自动同步到 iCloud 钥匙串：换手机 / 卸载重装（同一 Apple ID）后自动恢复会员，无需重新登录（需开启 iCloud 钥匙串）
             - 移除「我的」页「刷新会员状态」手动按钮，改为冷启动 / 登录态变化时静默同步（本地优先，断网或服务器到期不影响已付费会员使用）
 

@@ -16,7 +16,7 @@ struct ProfileView: View {
     @State private var activating = false
     @State private var activationMessage: String?
 
-    private let appDownloadURL = "https://github.com/jiayuLian/SQLink/releases/tag/v1.0.4"
+    private let appDownloadURL = "https://github.com/jiayuLian/SQLink/releases/tag/v1.0.6"
     private let authorWeChat = "cute6697"
     private let authorEmail = "lianjiayu998@163.com"
 
@@ -121,8 +121,14 @@ struct ProfileView: View {
                         .font(.caption).foregroundColor(.secondary)
                 }
 
+                Section("反馈与帮助") {
+                    NavigationLink { FeedbackView() } label: {
+                        Label("意见反馈", systemImage: "bubble.left.and.bubble.right")
+                    }
+                }
+
                 Section("关于") {
-                    HStack { Text("版本"); Spacer(); Text("1.0.4").foregroundColor(.secondary) }
+                    HStack { Text("版本"); Spacer(); Text("1.0.6").foregroundColor(.secondary) }
                     if let url = URL(string: appDownloadURL) {
                         Link("开源仓库 / 更新日志", destination: url)
                     }
