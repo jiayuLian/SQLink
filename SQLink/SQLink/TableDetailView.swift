@@ -449,7 +449,9 @@ struct TableFilterView: View {
                         let whereClause = buildWhereClause(conditions: conditions)
                         let orderBy = buildOrderBy(field: sortField, direction: sortDirection)
                         onApply(whereClause, orderBy)
-                        dismiss()
+                        // 延后一帧再关闭 sheet，确保 activeWhere/activeOrderBy 已提交，
+                        // 避免关闭动画与父视图状态提交竞争导致后续「编辑」点击失效。
+                        DispatchQueue.main.async { dismiss() }
                     }
                 }
             }
@@ -685,6 +687,10 @@ struct TableDataView: View {
                                 .font(.caption).foregroundColor(.secondary)
                         }
                         Spacer()
+                        Button { showFilter = true } label: {
+                            Label("筛选 & 排序", systemImage: "line.3.horizontal.decrease.circle")
+                                .font(.caption)
+                        }
                         if editMode {
                             Button("取消") { cancelEdit() }.font(.caption)
                             Button { Task { await saveEdits() } } label: { Label("保存", systemImage: "checkmark") }
@@ -713,6 +719,7 @@ struct TableDataView: View {
                     if editMode {
                         EditableGridView(columns: columns, rows: $editingValues,
                                          originalRows: previewRows, scale: gridScale * gridMagnify,
+                                         primaryKey: primaryKey,
                                          onChange: { hasChanges = true })
                             .frame(maxHeight: .infinity)
                             .contentShape(Rectangle())
@@ -725,7 +732,7 @@ struct TableDataView: View {
                             )
                             .onTapGesture(count: 2) { gridScale = 1 }
                     } else {
-                        ResultGridView(columns: previewCols, rows: previewRows, scale: gridScale * gridMagnify)
+                        ResultGridView(columns: previewCols, rows: previewRows, scale: gridScale * gridMagnify, primaryKey: primaryKey)
                             .frame(maxHeight: .infinity)
                             .contentShape(Rectangle())
                             .simultaneousGesture(
@@ -801,9 +808,6 @@ struct TableDataView: View {
 
     @ToolbarContentBuilder
     private var dataToolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigationBarTrailing) {
-            Button { showFilter = true } label: { Label("筛选", systemImage: "line.3.horizontal.decrease.circle") }
-        }
         // 导出：所有用户可用；免费版按免费额度限制行数，会员无限制。
         ToolbarItem(placement: .navigationBarTrailing) {
             Menu {

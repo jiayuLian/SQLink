@@ -106,7 +106,6 @@ struct ProfileView: View {
                 // 5. 关于（含联系方式）
                 Section("关于") {
                     HStack { Text("版本"); Spacer(); Text("1.0.10").foregroundColor(.secondary) }
-                    NavigationLink("更新日志", destination: ChangelogView())
                     HStack {
                         Text("联系作者")
                         Spacer()
@@ -328,34 +327,3 @@ extension UIImage {
     }
 }
 
-/// 内嵌更新日志页（不发外链、不依赖开源仓库）。
-struct ChangelogView: View {
-    var body: some View {
-        List {
-            Section("v1.0.10") {
-                Label("移除昵称，账号区仅展示邮箱", systemImage: "checkmark")
-                Label("「我的」新增：退出登录、激活码开通会员、会员状态刷新", systemImage: "checkmark")
-                Label("账号区显示会员到期时间", systemImage: "checkmark")
-                Label("每页条数切换即时生效（无需后退重进）", systemImage: "checkmark")
-                Label("登录成功自动关闭登录页；错误带红色提示", systemImage: "checkmark")
-                Label("查看建表 SQL 首次打开即正常加载", systemImage: "checkmark")
-                Label("关于页改为内嵌更新日志，移除开源仓库外链", systemImage: "checkmark")
-            }
-            Section("v1.0.9") {
-                Text("· 查看建表 SQL：缩进排版 + 语法高亮 + 双指缩放 + 复制")
-                Text("· 数据表格（查询 / 表浏览）支持双指缩放")
-                Text("· 我的页重排：账号置顶、外观第二；移除查询设置与分享")
-                Text("· 登录 / 注册 / 找回密码三态，支持第三方输入法")
-            }
-            Section("v1.0.8") {
-                Text("· 意见反馈入口与后端反馈接口")
-                Text("· 防爆破：登录 / 激活 / 管理员接口限流")
-            }
-            Section("更早版本") {
-                Text("· 基础连接、表浏览、查询控制台、数据导出")
-            }
-        }
-        .navigationTitle("更新日志")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}

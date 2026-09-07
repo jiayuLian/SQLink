@@ -15,6 +15,7 @@ struct ConnectionEditorView: View {
     @State private var trustSelfSigned: Bool
     @State private var testMessage: String?
     @State private var testing = false
+    @State private var showPwd = true
 
     private var isNew: Bool {
         !store.profiles.contains(where: { $0.id == target.id })
@@ -43,7 +44,13 @@ struct ConnectionEditorView: View {
                         .keyboardType(.numberPad)
                     TextField("用户名", text: $user)
                         .textInputAutocapitalization(.never)
-                    SecureField("密码", text: $password)
+                    HStack {
+                        PasswordField(text: $password, placeholder: "密码", isSecure: $showPwd)
+                        Button { showPwd.toggle() } label: {
+                            Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                                .foregroundColor(.secondary)
+                        }
+                    }
                     TextField("默认数据库（可选）", text: $database)
                         .textInputAutocapitalization(.never)
                 }

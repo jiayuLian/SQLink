@@ -41,11 +41,17 @@ struct ConnectionRow: View {
     }
 }
 
-/// Clean, scrollable result grid (Navicat-style).
+/// Clean, scrollable result grid (Navicat-style). 真实主键列以 🔑 标记并高亮，便于一眼确认真实 ID。
 struct ResultGridView: View {
     let columns: [ColumnDef]
     let rows: [[String?]]
+    var primaryKey: String? = nil
     var scale: CGFloat = 1.0
+
+    private var pkIndex: Int? {
+        guard let pk = primaryKey else { return nil }
+        return columns.firstIndex { $0.name == pk }
+    }
 
     var body: some View {
         if columns.isEmpty {
@@ -55,17 +61,19 @@ struct ResultGridView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 0) {
                         ForEach(columns) { c in
-                            Text(c.name)
+                            let isPK = primaryKey.map { c.name == $0 } ?? false
+                            Text((isPK ? "🔑 " : "") + c.name)
                                 .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
                                 .frame(minWidth: 120 * scale, alignment: .leading)
                                 .padding(6 * scale)
-                                .background(Color.gray.opacity(0.18))
+                                .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
                         }
                     }
                     ForEach(0..<rows.count, id: \.self) { ri in
                         let row = rows[ri]
                         HStack(spacing: 0) {
                             ForEach(0..<columns.count, id: \.self) { j in
+                                let isPK = pkIndex.map { $0 == j } ?? false
                                 let v = row[safe: j]
                                 let display = v == nil ? "NULL" : (v! ?? "")
                                 Text(display)
@@ -73,7 +81,7 @@ struct ResultGridView: View {
                                     .foregroundColor(v == nil ? .secondary : .primary)
                                     .frame(minWidth: 120 * scale, alignment: .leading)
                                     .padding(6 * scale)
-                                    .background((ri + j) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
+                                    .background(isPK ? Color.accentColor.opacity(0.10) : ((ri + j) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear))
                                     .lineLimit(4)
                                     .contextMenu {
                                         if v != nil {
@@ -94,11 +102,12 @@ struct ResultGridView: View {
     }
 }
 
-/// Inline-editable result grid for TableDetailView editing mode.
+/// Inline-editable result grid for TableDetailView editing mode. 真实主键列以 🔑 标记并高亮。
 struct EditableGridView: View {
     let columns: [ColumnInfo]
     @Binding var rows: [[String?]]
     let originalRows: [[String?]]
+    var primaryKey: String? = nil
     var scale: CGFloat = 1.0
     let onChange: () -> Void
 
@@ -121,23 +130,25 @@ struct EditableGridView: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 0) {
                     ForEach(0..<columns.count, id: \.self) { ci in
-                        Text(columns[ci].field)
+                        let isPK = primaryKey.map { columns[ci].field == $0 } ?? false
+                        Text((isPK ? "🔑 " : "") + columns[ci].field)
                             .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
                             .frame(minWidth: 120 * scale, alignment: .leading)
                             .padding(6 * scale)
-                            .background(Color.gray.opacity(0.18))
+                            .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
                     }
                 }
                 ForEach(0..<rows.count, id: \.self) { ri in
                     HStack(spacing: 0) {
                         ForEach(0..<columns.count, id: \.self) { ci in
+                            let isPK = primaryKey.map { columns[ci].field == $0 } ?? false
                             TextField(rows[ri][ci] == nil ? "NULL" : "",
                                       text: binding(for: ri, ci))
                                 .font(.system(size: 12 * scale, design: .monospaced))
                                 .foregroundColor(rows[ri][ci] == nil ? .secondary : .primary)
                                 .frame(minWidth: 120 * scale, alignment: .leading)
                                 .padding(6 * scale)
-                                .background((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
+                                .background(isPK ? Color.accentColor.opacity(0.10) : ((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear))
                         }
                     }
                 }

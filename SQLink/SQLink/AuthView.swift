@@ -59,14 +59,18 @@ private struct LoginForm: View {
     var body: some View {
         VStack(spacing: 16) {
             TextField("邮箱", text: $email)
-                .textContentType(.emailAddress)
                 .keyboardType(.emailAddress)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
                 .textFieldStyle(.roundedBorder)
 
-            SecureField("密码", text: $password)
-                .textFieldStyle(.roundedBorder)
+            HStack {
+                PasswordField(text: $password, placeholder: "密码", isSecure: $showPwd)
+                Button { showPwd.toggle() } label: {
+                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
 
             if let error = error {
                 Text(error).foregroundColor(.red).font(.caption)
@@ -108,6 +112,7 @@ private struct RegisterForm: View {
     @State private var email = ""
     @State private var code = ""
     @State private var password = ""
+    @State private var showPwd = true
     @State private var confirm = ""
     @State private var loading = false
     @State private var sending = false
@@ -120,7 +125,6 @@ private struct RegisterForm: View {
         VStack(spacing: 16) {
             HStack {
                 TextField("邮箱", text: $email)
-                    .textContentType(.emailAddress)
                     .keyboardType(.emailAddress)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
@@ -138,11 +142,20 @@ private struct RegisterForm: View {
                 .keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
 
-            SecureField("密码（至少 6 位）", text: $password)
-                .textFieldStyle(.roundedBorder)
-
-            SecureField("确认密码", text: $confirm)
-                .textFieldStyle(.roundedBorder)
+            HStack {
+                PasswordField(text: $password, placeholder: "密码（至少 6 位）", isSecure: $showPwd)
+                Button { showPwd.toggle() } label: {
+                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
+            HStack {
+                PasswordField(text: $confirm, placeholder: "确认密码", isSecure: $showPwd)
+                Button { showPwd.toggle() } label: {
+                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
 
             if let error = error {
                 Text(error).foregroundColor(.red).font(.caption)
@@ -221,7 +234,6 @@ private struct ForgotPasswordForm: View {
         VStack(spacing: 16) {
             HStack {
                 TextField("邮箱", text: $email)
-                    .textContentType(.emailAddress)
                     .keyboardType(.emailAddress)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
@@ -237,11 +249,20 @@ private struct ForgotPasswordForm: View {
                 .keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
 
-            SecureField("新密码（至少 6 位）", text: $password)
-                .textFieldStyle(.roundedBorder)
-
-            SecureField("确认新密码", text: $confirm)
-                .textFieldStyle(.roundedBorder)
+            HStack {
+                PasswordField(text: $password, placeholder: "新密码（至少 6 位）", isSecure: $showPwd)
+                Button { showPwd.toggle() } label: {
+                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
+            HStack {
+                PasswordField(text: $confirm, placeholder: "确认新密码", isSecure: $showPwd)
+                Button { showPwd.toggle() } label: {
+                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
 
             if let error = error {
                 Text(error).foregroundColor(.red).font(.caption)
@@ -299,6 +320,43 @@ private struct ForgotPasswordForm: View {
             } catch {
                 await MainActor.run { self.error = error.localizedDescription; self.loading = false }
             }
+        }
+    }
+}
+
+/// 密码输入：基于 UITextField 封装，带 👁 明文/密文切换。
+/// 密文态（isSecureTextEntry = true）仍受 iOS 安全限制禁用第三方输入法；
+/// 点眼睛切到明文后 isSecureTextEntry = false，此时允许使用第三方键盘。
+struct PasswordField: UIViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    @Binding var isSecure: Bool
+
+    func makeUIView(context: Context) -> UITextField {
+        let tf = UITextField()
+        tf.placeholder = placeholder
+        tf.borderStyle = .roundedRect
+        tf.isSecureTextEntry = true
+        tf.autocapitalizationType = .none
+        tf.autocorrectionType = .no
+        tf.delegate = context.coordinator
+        tf.addTarget(context.coordinator, action: #selector(Coordinator.textChanged(_:)), for: .editingChanged)
+        return tf
+    }
+
+    func updateUIView(_ uiView: UITextField, context: Context) {
+        uiView.isSecureTextEntry = isSecure
+        // 切换安全态后 iOS 可能清空文本，这里回写以保证输入不丢
+        if uiView.text != text { uiView.text = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, UITextFieldDelegate {
+        let parent: PasswordField
+        init(_ parent: PasswordField) { self.parent = parent }
+        @objc func textChanged(_ tf: UITextField) {
+            parent.text = tf.text ?? ""
         }
     }
 }
