@@ -103,7 +103,7 @@ struct ResultGridView: View {
         let row = rows[ri]
         return HStack(spacing: 0) {
             ForEach(0..<columns.count, id: \.self) { ci in
-                resultCell(ri: ri, ci: ci, value: row[safe: ci])
+                resultCell(ri: ri, ci: ci, value: row[ci])
             }
         }
     }
