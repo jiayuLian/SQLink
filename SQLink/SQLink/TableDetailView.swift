@@ -478,6 +478,7 @@ struct TableFilterView: View {
                         Text("无").tag("")
                         ForEach(fieldNames, id: \.self) { Text($0).tag($0) }
                     }
+                    .pickerStyle(.menu)   // 使用菜单避免 push 导航页，防止 overlay 弹窗被意外关闭
                     Picker("方向", selection: $draftSortDirection) {
                         ForEach(SortDirection.allCases) { d in
                             Text(d.label).tag(d)
