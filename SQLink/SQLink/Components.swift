@@ -42,16 +42,22 @@ struct ConnectionRow: View {
 }
 
 /// Clean, scrollable result grid (Navicat-style). 真实主键列以 🔑 标记并高亮，便于一眼确认真实 ID。
+/// 长文本会被截断显示，点击单元格可查看完整值并复制；编辑模式请使用 EditableGridView。
 struct ResultGridView: View {
     let columns: [ColumnDef]
     let rows: [[String?]]
     var primaryKey: String? = nil
     var scale: CGFloat = 1.0
 
+    @State private var selectedCell: SelectedCell? = nil
+
     private var pkIndex: Int? {
         guard let pk = primaryKey else { return nil }
         return columns.firstIndex { $0.name == pk }
     }
+
+    private let minColWidth: CGFloat = 80
+    private let maxColWidth: CGFloat = 160
 
     var body: some View {
         if columns.isEmpty {
@@ -59,50 +65,70 @@ struct ResultGridView: View {
         } else {
             ScrollView([.horizontal, .vertical]) {
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 0) {
-                        ForEach(columns) { c in
-                            let isPK = primaryKey.map { c.name == $0 } ?? false
-                            Text((isPK ? "🔑 " : "") + c.name)
-                                .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
-                                .frame(minWidth: 120 * scale, alignment: .leading)
-                                .padding(6 * scale)
-                                .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
-                        }
-                    }
+                    headerRow
                     ForEach(0..<rows.count, id: \.self) { ri in
-                        let row = rows[ri]
-                        HStack(spacing: 0) {
-                            ForEach(0..<columns.count, id: \.self) { j in
-                                let isPK = pkIndex.map { $0 == j } ?? false
-                                let v = row[safe: j]
-                                let display = v == nil ? "NULL" : (v! ?? "")
-                                Text(display)
-                                    .font(.system(size: 12 * scale, design: .monospaced))
-                                    .foregroundColor(v == nil ? .secondary : .primary)
-                                    .frame(minWidth: 120 * scale, alignment: .leading)
-                                    .padding(6 * scale)
-                                    .background(isPK ? Color.accentColor.opacity(0.10) : ((ri + j) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear))
-                                    .lineLimit(4)
-                                    .contextMenu {
-                                        if v != nil {
-                                            Button { UIPasteboard.general.string = v! ?? "" }
-                                                label: { Label("复制值", systemImage: "doc.on.doc") }
-                                        } else {
-                                            Button { } label: { Label("NULL（无值）", systemImage: "nosign") }
-                                                .disabled(true)
-                                        }
-                                    }
-                            }
-                        }
+                        dataRow(ri: ri)
                     }
                 }
             }
             .frame(maxHeight: .infinity)
+            .sheet(item: $selectedCell) { cell in
+                CellValueSheet(column: columns[safe: cell.col]?.name ?? "", value: cell.value)
+            }
+        }
+    }
+
+    private var headerRow: some View {
+        HStack(spacing: 0) {
+            ForEach(columns) { c in
+                let isPK = primaryKey.map { c.name == $0 } ?? false
+                Text((isPK ? "🔑 " : "") + c.name)
+                    .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+                    .padding(6 * scale)
+                    .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
+            }
+        }
+    }
+
+    private func dataRow(ri: Int) -> some View {
+        let row = rows[ri]
+        return HStack(spacing: 0) {
+            ForEach(0..<columns.count, id: \.self) { j in
+                let isPK = pkIndex.map { $0 == j } ?? false
+                let v = row[safe: j]
+                let display = v == nil ? "NULL" : (v! ?? "")
+                Text(display)
+                    .font(.system(size: 12 * scale, design: .monospaced))
+                    .foregroundColor(v == nil ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+                    .padding(6 * scale)
+                    .background(isPK ? Color.accentColor.opacity(0.10) : ((ri + j) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear))
+                    .contextMenu {
+                        if v != nil {
+                            Button { UIPasteboard.general.string = v! ?? "" }
+                                label: { Label("复制值", systemImage: "doc.on.doc") }
+                            Button { selectedCell = SelectedCell(row: ri, col: j, value: v!) }
+                                label: { Label("查看完整值", systemImage: "eye") }
+                        } else {
+                            Button { } label: { Label("NULL（无值）", systemImage: "nosign") }
+                                .disabled(true)
+                        }
+                    }
+                    .onTapGesture {
+                        selectedCell = SelectedCell(row: ri, col: j, value: v)
+                    }
+            }
         }
     }
 }
 
-/// Inline-editable result grid for TableDetailView editing mode. 真实主键列以 🔑 标记并高亮。
+/// Inline-editable result grid for TableDetailView editing mode. 真实主键列以 🔑🔒 标记并高亮。
+/// 单元格宽度受限，长文本截断显示；长按非主键单元格可选择「编辑完整值」，在弹窗中用多行编辑器修改。
 struct EditableGridView: View {
     let columns: [ColumnInfo]
     @Binding var rows: [[String?]]
@@ -110,6 +136,16 @@ struct EditableGridView: View {
     var primaryKey: String? = nil
     var scale: CGFloat = 1.0
     let onChange: () -> Void
+
+    @State private var editTarget: EditTarget? = nil
+
+    private var pkIndex: Int? {
+        guard let pk = primaryKey else { return nil }
+        return columns.firstIndex { $0.field == pk }
+    }
+
+    private let minColWidth: CGFloat = 80
+    private let maxColWidth: CGFloat = 160
 
     private func binding(for ri: Int, _ ci: Int) -> Binding<String> {
         Binding(
@@ -128,43 +164,146 @@ struct EditableGridView: View {
     var body: some View {
         ScrollView([.horizontal, .vertical]) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 0) {
-                    ForEach(0..<columns.count, id: \.self) { ci in
-                        let isPK = primaryKey.map { columns[ci].field == $0 } ?? false
-                        Text((isPK ? "🔑🔒 " : "") + columns[ci].field)
-                            .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
-                            .frame(minWidth: 120 * scale, alignment: .leading)
-                            .padding(6 * scale)
-                            .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
-                    }
-                }
+                headerRow
                 ForEach(0..<rows.count, id: \.self) { ri in
-                    HStack(spacing: 0) {
-                        ForEach(0..<columns.count, id: \.self) { ci in
-                            let isPK = primaryKey.map { columns[ci].field == $0 } ?? false
-                            if isPK {
-                                // 主键列：编辑态只读，避免误改导致定位锚丢失 / 主键冲突
-                                Text(rows[ri][ci] == nil ? "NULL" : (rows[ri][ci] ?? ""))
-                                    .font(.system(size: 12 * scale, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                                    .frame(minWidth: 120 * scale, alignment: .leading)
-                                    .padding(6 * scale)
-                                    .background(Color.accentColor.opacity(0.10))
-                            } else {
-                                TextField(rows[ri][ci] == nil ? "NULL" : "",
-                                          text: binding(for: ri, ci))
-                                    .font(.system(size: 12 * scale, design: .monospaced))
-                                    .foregroundColor(rows[ri][ci] == nil ? .secondary : .primary)
-                                    .frame(minWidth: 120 * scale, alignment: .leading)
-                                    .padding(6 * scale)
-                                    .background((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
-                            }
-                        }
-                    }
+                    dataRow(ri: ri)
                 }
             }
         }
         .frame(height: 320)
         .border(Color.gray.opacity(0.3), width: 0.5)
+        .sheet(item: $editTarget) { target in
+            CellEditSheet(title: columns[safe: target.ci]?.field ?? "", text: binding(for: target.ri, target.ci))
+        }
     }
+
+    private var headerRow: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<columns.count, id: \.self) { ci in
+                let isPK = primaryKey.map { columns[ci].field == $0 } ?? false
+                Text((isPK ? "🔑🔒 " : "") + columns[ci].field)
+                    .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+                    .padding(6 * scale)
+                    .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
+            }
+        }
+    }
+
+    private func dataRow(ri: Int) -> some View {
+        HStack(spacing: 0) {
+            ForEach(0..<columns.count, id: \.self) { ci in
+                let isPK = pkIndex.map { $0 == ci } ?? false
+                if isPK {
+                    Text(rows[ri][ci] == nil ? "NULL" : (rows[ri][ci] ?? ""))
+                        .font(.system(size: 12 * scale, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+                        .padding(6 * scale)
+                        .background(Color.accentColor.opacity(0.10))
+                } else {
+                    TextField(rows[ri][ci] == nil ? "NULL" : "",
+                              text: binding(for: ri, ci))
+                        .font(.system(size: 12 * scale, design: .monospaced))
+                        .foregroundColor(rows[ri][ci] == nil ? .secondary : .primary)
+                        .lineLimit(1)
+                        .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+                        .padding(6 * scale)
+                        .background((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
+                        .contextMenu {
+                            Button { editTarget = EditTarget(ri: ri, ci: ci) }
+                                label: { Label("编辑完整值", systemImage: "square.and.pencil") }
+                        }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 单元格完整值查看 / 编辑弹窗
+
+/// 只读模式下查看单元格完整值并复制。
+struct CellValueSheet: View {
+    let column: String
+    let value: String?
+    @Environment(\.presentationMode) var presentationMode
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text(column)) {
+                    if let value = value, !value.isEmpty {
+                        TextEditor(text: .constant(value))
+                            .font(.system(size: 14, design: .monospaced))
+                            .frame(minHeight: 200)
+                    } else {
+                        Text(value == nil ? "NULL" : "空字符串")
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 8)
+                    }
+                }
+                Section {
+                    Button {
+                        UIPasteboard.general.string = value ?? ""
+                    } label: {
+                        Label("复制完整值", systemImage: "doc.on.doc")
+                    }
+                    .disabled(value == nil)
+                }
+            }
+            .navigationTitle(column)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { presentationMode.wrappedValue.dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// 编辑模式下用多行文本编辑器修改长单元格。
+struct CellEditSheet: View {
+    let title: String
+    @Binding var text: String
+    @Environment(\.presentationMode) var presentationMode
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    TextEditor(text: $text)
+                        .font(.system(size: 14, design: .monospaced))
+                        .frame(minHeight: 200)
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { presentationMode.wrappedValue.dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { presentationMode.wrappedValue.dismiss() }
+                }
+            }
+        }
+    }
+}
+
+private struct SelectedCell: Identifiable {
+    let id = UUID()
+    let row: Int
+    let col: Int
+    let value: String?
+}
+
+private struct EditTarget: Identifiable {
+    let id = UUID()
+    let ri: Int
+    let ci: Int
 }
