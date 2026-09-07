@@ -460,13 +460,13 @@ struct TableFilterView: View {
                     Button { addCondition() } label: { Label("添加筛选条件", systemImage: "plus") }
                 }
 
-                ForEach(0..<draftConditions.count, id: \.self) { index in
+                ForEach($draftConditions) { $c in
                     Section {
-                        FilterConditionRow(condition: $draftConditions[index],
-                                           index: index,
+                        FilterConditionRow(condition: $c,
+                                           showLogic: $c.wrappedValue.logic != nil,
                                            fields: fieldNames,
                                            db: db, table: table, connection: connection,
-                                           onDelete: { removeCondition(at: index) })
+                                           onDelete: { draftConditions.removeAll { $0.id == $c.wrappedValue.id } })
                     }
                 }
 
@@ -500,9 +500,6 @@ struct TableFilterView: View {
         draftConditions.append(FilterCondition(field: field, op: .contains, value: "", enabled: true, logic: logic))
     }
 
-    private func removeCondition(at index: Int) {
-        draftConditions.remove(at: index)
-    }
 }
 
 // MARK: - Filter condition row
@@ -510,7 +507,7 @@ struct TableFilterView: View {
 /// (the previous shared `activeField`/`suggestions` design could crash on add).
 struct FilterConditionRow: View {
     @Binding var condition: FilterCondition
-    let index: Int
+    let showLogic: Bool
     let fields: [String]
     let db: String
     let table: String
@@ -532,7 +529,7 @@ struct FilterConditionRow: View {
             HStack(spacing: 8) {
                 Toggle("", isOn: $condition.enabled)
                     .labelsHidden()
-                if index > 0 {
+                if showLogic {
                     Picker("关系", selection: logicBinding) {
                         ForEach(FilterLogic.allCases) { l in
                             Text(l.label).tag(l)
