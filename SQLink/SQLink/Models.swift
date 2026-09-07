@@ -219,9 +219,6 @@ final class AppSettings: ObservableObject {
     @Published var avatarURL: String {
         didSet { UserDefaults.standard.set(avatarURL, forKey: "sqlink.avatarURL") }
     }
-    @Published var nickname: String {
-        didSet { UserDefaults.standard.set(nickname, forKey: "sqlink.nickname") }
-    }
     /// 会员到期时间（ISO 字符串）。用于「服务器不可达」兜底：本地缓存判断会员是否仍在有效期。
     @Published var proExpiresAt: String {
         didSet { UserDefaults.standard.set(proExpiresAt, forKey: "sqlink.proExpiresAt") }
@@ -248,7 +245,6 @@ final class AppSettings: ObservableObject {
         self.authToken = d.string(forKey: "sqlink.authToken") ?? ""
         self.authEmail = d.string(forKey: "sqlink.authEmail") ?? ""
         self.avatarURL = d.string(forKey: "sqlink.avatarURL") ?? ""
-        self.nickname = d.string(forKey: "sqlink.nickname") ?? ""
         self.proExpiresAt = d.string(forKey: "sqlink.proExpiresAt") ?? ""
         self.guestMode = (d.object(forKey: "sqlink.guestMode") as? Bool) ?? false
         if let pd = d.data(forKey: "sqlink.plan"),
@@ -267,12 +263,11 @@ final class AppSettings: ObservableObject {
         authToken = ""
         authEmail = ""
         avatarURL = ""
-        nickname = ""
         proExpiresAt = ""
         guestMode = false
         isPro = false
-        // 清除 iCloud Keychain 中的凭证，彻底登出（换机/重装后也不再自动恢复）。
-        KeychainSync.clearAll()
+        // 清除【本地】Keychain 中的登录态与会员态，彻底登出（卸载即重置）。
+        KeychainHelper.clearLogin()
     }
 
     func enterGuestMode() {
@@ -282,40 +277,40 @@ final class AppSettings: ObservableObject {
         isPro = false
     }
 
-    func applyMembership(_ email: String, token: String, isPro: Bool, nickname: String = "", expiresAt: String = "") {
+    func applyMembership(_ email: String, token: String, isPro: Bool, expiresAt: String = "") {
         self.authEmail = email
         self.authToken = token
         self.guestMode = false
         self.isPro = isPro
-        self.nickname = nickname
         self.proExpiresAt = expiresAt
-        // 登录/注册成功后立即把登录态与会员状态固化到 iCloud Keychain，
-        // 使重装 / 换机（同 Apple ID）可自动恢复，无需重新登录。
-        syncCredentialsToKeychain()
+        // 登录/注册成功后固化凭据：登录态与会员态均存【本地】Keychain（见 persistCredentials）。
+        persistCredentials()
     }
 
-    /// 将当前登录态与会员状态同步到 iCloud Keychain（同 Apple ID 设备抗卸载/换机恢复）。
-    /// 若 iCloud 钥匙串不可用则静默失败，不影响主流程。仅在已登录时有意义。
-    func syncCredentialsToKeychain() {
+    /// 持久化当前凭据：登录态与会员态均存【本地】Keychain（卸载即清空，无 iCloud 同步）。
+    /// 会员状态以服务器为准，每次启动 / 登录 / 激活后都会通过 refreshMembership() 重新拉取。
+    /// 仅当已登录时有意义。
+    func persistCredentials() {
         guard !authToken.isEmpty else { return }
-        KeychainSync.save(authToken, for: KeychainSync.authTokenKey)
-        KeychainSync.save(authEmail, for: KeychainSync.authEmailKey)
-        KeychainSync.save(nickname, for: KeychainSync.nicknameKey)
-        KeychainSync.save(proExpiresAt, for: KeychainSync.proExpiresAtKey)
-        KeychainSync.save(isPro ? "1" : "0", for: KeychainSync.isProKey)
+        // 登录态 → 本地 Keychain（不 iCloud 同步）
+        KeychainHelper.saveLogin(authToken, for: KeychainHelper.authTokenLoginKey)
+        KeychainHelper.saveLogin(authEmail, for: KeychainHelper.authEmailLoginKey)
+        // 会员态 → 本地 Keychain（与登录态同源，卸载即重置；服务器为准，启动即刷新）
+        KeychainHelper.saveLogin(proExpiresAt, for: KeychainHelper.proExpiresAtLoginKey)
+        KeychainHelper.saveLogin(isPro ? "1" : "0", for: KeychainHelper.isProLoginKey)
     }
 
-    /// 启动 / 重装 / 换机时，从 iCloud Keychain 恢复登录态与会员状态。
-    /// 仅当本机 UserDefaults 没有登录态（即首次安装或卸载重装）时才尝试，
-    /// 避免覆盖本机已有的有效会话。
+    /// 启动 / 重装 / 换机时恢复凭据。
+    /// 登录态与会员态均仅从【本地】Keychain 读取：iOS 卸载会清除本地 Keychain，
+    /// 因此重装后两者皆为空、需重新登录（满足「卸载即重置」）。
     private func restoreFromKeychainIfNeeded() {
-        guard authToken.isEmpty else { return }
-        guard let token = KeychainSync.read(KeychainSync.authTokenKey), !token.isEmpty else { return }
+        guard authToken.isEmpty else { return }            // 本机已有登录态则不覆盖
+        guard let token = KeychainHelper.loadLogin(KeychainHelper.authTokenLoginKey), !token.isEmpty else { return }
         self.authToken = token
-        self.authEmail = KeychainSync.read(KeychainSync.authEmailKey) ?? ""
-        self.nickname = KeychainSync.read(KeychainSync.nicknameKey) ?? ""
-        self.proExpiresAt = KeychainSync.read(KeychainSync.proExpiresAtKey) ?? ""
-        self.isPro = KeychainSync.read(KeychainSync.isProKey) == "1"
+        self.authEmail = KeychainHelper.loadLogin(KeychainHelper.authEmailLoginKey) ?? ""
+        // 登录态存在 → 从本地恢复会员态（重装后本就为空，需重新登录才会恢复）
+        self.proExpiresAt = KeychainHelper.loadLogin(KeychainHelper.proExpiresAtLoginKey) ?? ""
+        self.isPro = KeychainHelper.loadLogin(KeychainHelper.isProLoginKey) == "1"
     }
 
     /// 服务器不可达兜底：本地缓存判断会员是否仍有效。
@@ -333,6 +328,26 @@ final class AppSettings: ObservableObject {
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"
         f.timeZone = TimeZone(identifier: "Asia/Shanghai")
         return f.date(from: s)
+    }
+
+    /// 刷新会员状态与账号资料（并刷新公开配置）。供冷启动、登录、手动「刷新会员状态」、激活码开通后调用。
+    /// 失败时降级为本地缓存兜底，已付费会员不会被误判为免费。
+    func refreshMembership() async {
+        guard isLoggedIn, !authToken.isEmpty else { return }
+        await refreshPlan()
+        do {
+            let data = try await AuthService.shared.fetchMembership(baseURL: apiBaseURL, token: authToken)
+            await MainActor.run {
+            if let email = data.email { self.authEmail = email }
+            self.isPro = data.isPro
+                self.proExpiresAt = data.expiresAt ?? ""
+                if let avatar = data.avatar, !avatar.isEmpty { self.avatarURL = avatar }
+                self.persistCredentials()
+            }
+        } catch {
+            await MainActor.run { self.isPro = self.resolveProFallback() }
+            print("刷新会员状态失败（已启用本地兜底）：\(error.localizedDescription)")
+        }
     }
 
     /// 拉取后端公共配置（免费额度 + 价格），失败则保留本地缓存。

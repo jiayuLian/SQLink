@@ -50,6 +50,7 @@ struct AuthView: View {
 
 private struct LoginForm: View {
     @EnvironmentObject var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
     @State private var email = ""
     @State private var password = ""
     @State private var loading = false
@@ -90,8 +91,9 @@ private struct LoginForm: View {
             do {
                 let result = try await AuthService.shared.login(baseURL: settings.apiBaseURL, email: email, password: password)
                 await MainActor.run {
-                    settings.applyMembership(result.email, token: result.token, isPro: result.isPro, nickname: result.nickname, expiresAt: result.expiresAt ?? "")
+                    settings.applyMembership(result.email, token: result.token, isPro: result.isPro, expiresAt: result.expiresAt ?? "")
                     loading = false
+                    dismiss()
                 }
             } catch {
                 await MainActor.run { self.error = error.localizedDescription; self.loading = false }
@@ -190,7 +192,7 @@ private struct RegisterForm: View {
             do {
                 let result = try await AuthService.shared.register(baseURL: settings.apiBaseURL, email: email, code: code, password: password)
                 await MainActor.run {
-                    settings.applyMembership(result.email, token: result.token, isPro: result.isPro, nickname: result.nickname, expiresAt: result.expiresAt ?? "")
+                    settings.applyMembership(result.email, token: result.token, isPro: result.isPro, expiresAt: result.expiresAt ?? "")
                     loading = false
                 }
             } catch {

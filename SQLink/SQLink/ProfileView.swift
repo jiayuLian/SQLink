@@ -9,10 +9,13 @@ struct ProfileView: View {
     @State private var showImagePicker = false
     @State private var uploading = false
     @State private var avatarError: String?
-    @State private var editingNickname = false
-    @State private var nicknameDraft = ""
+    @State private var confirmLogout = false
+    @State private var refreshing = false
+    @State private var showActivate = false
+    @State private var activationCode = ""
+    @State private var activating = false
+    @State private var activationError: String?
 
-    private let appDownloadURL = "https://github.com/jiayuLian/SQLink/releases/tag/v1.0.9"
     private let authorWeChat = "cute6697"
     private let authorEmail = "lianjiayu998@163.com"
 
@@ -33,8 +36,11 @@ struct ProfileView: View {
                                     .lineLimit(1)
                                 if !settings.isPro {
                                     Text("免费版").font(.caption).foregroundColor(.secondary)
+                                } else if settings.proExpiresAt.isEmpty {
+                                    Text("永久会员").font(.caption).foregroundColor(.accentColor)
                                 } else {
-                                    Text(proLabel).font(.caption).foregroundColor(.accentColor)
+                                    Text("会员版 · 到期 \(formatExpiry(settings.proExpiresAt))")
+                                        .font(.caption).foregroundColor(.accentColor)
                                 }
                             } else {
                                 Text("未登录").font(.subheadline)
@@ -47,23 +53,35 @@ struct ProfileView: View {
                     }
 
                     if settings.isLoggedIn {
-                        HStack {
-                            Text("昵称")
-                            Spacer()
-                            if editingNickname {
-                                TextField("昵称", text: $nicknameDraft)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(maxWidth: 180)
-                                Button("保存") { saveNickname() }.font(.caption)
-                                Button("取消") { editingNickname = false; nicknameDraft = settings.nickname }.font(.caption)
-                            } else {
-                                Text(settings.nickname.isEmpty ? "未设置" : settings.nickname)
-                                    .foregroundColor(.secondary)
-                                Button("编辑") { nicknameDraft = settings.nickname; editingNickname = true }.font(.caption)
-                            }
-                        }
                         if let err = avatarError {
                             Text(err).font(.caption).foregroundColor(.red)
+                        }
+                        // 会员区：非会员可激活码开通，会员可刷新状态
+                        if settings.isPro {
+                            HStack {
+                                Label("会员状态", systemImage: "checkmark.seal.fill")
+                                    .foregroundColor(.accentColor)
+                                Spacer()
+                                if refreshing {
+                                    ProgressView().scaleEffect(0.8)
+                                } else {
+                                    Button { Task { await refreshProStatus() } } label: {
+                                        Label("刷新状态", systemImage: "arrow.clockwise").font(.caption)
+                                    }
+                                }
+                            }
+                        } else {
+                            Button { showActivate = true } label: {
+                                Label("激活码开通会员", systemImage: "key.fill")
+                            }
+                        }
+                        // 退出登录
+                        Button(role: .destructive) { confirmLogout = true } label: {
+                            Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                    } else {
+                        Button { showLogin = true } label: {
+                            Label("登录 / 注册", systemImage: "person.crop.circle.badge.plus")
                         }
                     }
                 }
@@ -87,12 +105,10 @@ struct ProfileView: View {
 
                 // 5. 关于（含联系方式）
                 Section("关于") {
-                    HStack { Text("版本"); Spacer(); Text("1.0.9").foregroundColor(.secondary) }
-                    if let url = URL(string: appDownloadURL) {
-                        Link("开源仓库 / 更新日志", destination: url)
-                    }
+                    HStack { Text("版本"); Spacer(); Text("1.0.10").foregroundColor(.secondary) }
+                    NavigationLink("更新日志", destination: ChangelogView())
                     HStack {
-                        Text("联系作者（仅用于问题反馈）")
+                        Text("联系作者")
                         Spacer()
                         Text(authorWeChat).foregroundColor(.secondary)
                     }
@@ -114,7 +130,45 @@ struct ProfileView: View {
             .alert("已复制", isPresented: $showCopied) {
                 Button("确定") {}
             } message: {
-                Text("微信号 \(authorWeChat) 已复制到剪贴板，添加时请备注你的 App 昵称或注册邮箱，便于核对问题")
+                Text("微信号 \(authorWeChat) 已复制到剪贴板，添加时请备注你的注册邮箱，便于核对问题")
+            }
+            .alert("确认退出登录", isPresented: $confirmLogout) {
+                Button("取消", role: .cancel) {}
+                Button("退出", role: .destructive) { settings.logout() }
+            } message: {
+                Text("退出后需重新登录，本机登录态将被清除（如不想被重装后自动恢复，请先退出再卸载）")
+            }
+            .sheet(isPresented: $showActivate) {
+                NavigationView {
+                    VStack(spacing: 16) {
+                        Text("输入激活码自助开通会员（年卡 / 永久卡）").font(.caption).foregroundColor(.secondary)
+                        TextField("激活码", text: $activationCode)
+                            .textFieldStyle(.roundedBorder)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                        if let e = activationError {
+                            Text(e).foregroundColor(.red).font(.caption)
+                        }
+                        Button {
+                            Task { await redeemActivationCode() }
+                        } label: {
+                            HStack { if activating { ProgressView().scaleEffect(0.8) }; Text("开通会员") }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(activationCode.trimmingCharacters(in: .whitespaces).isEmpty || activating)
+                        Spacer()
+                    }
+                    .padding()
+                    .navigationTitle("开通会员")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("取消") { showActivate = false }
+                        }
+                    }
+                }
             }
         }
     }
@@ -124,8 +178,7 @@ struct ProfileView: View {
     }
 
     private var displayName: String {
-        if !settings.nickname.isEmpty { return settings.nickname }
-        return settings.authEmail.isEmpty ? "未登录" : settings.authEmail
+        settings.authEmail.isEmpty ? "未登录" : settings.authEmail
     }
 
     /// 未登录 → 跳登录；已登录 → 选头像（无「更换头像」文字，直接调相册）。
@@ -138,17 +191,38 @@ struct ProfileView: View {
         showCopied = true
     }
 
-    private func saveNickname() {
-        let trimmed = nicknameDraft.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { editingNickname = false; return }
-        Task {
-            do {
-                try await AuthService.shared.updateProfile(baseURL: settings.apiBaseURL, token: settings.authToken, nickname: trimmed)
-                await MainActor.run { settings.nickname = trimmed; editingNickname = false }
-            } catch {
-                await MainActor.run { avatarError = error.localizedDescription }
+    private func refreshProStatus() async {
+        refreshing = true
+        await settings.refreshMembership()
+        await MainActor.run { refreshing = false }
+    }
+
+    private func redeemActivationCode() async {
+        activating = true; activationError = nil
+        let code = activationCode.trimmingCharacters(in: .whitespaces)
+        do {
+            let data = try await AuthService.shared.redeemActivation(baseURL: settings.apiBaseURL, token: settings.authToken, code: code)
+            await MainActor.run {
+                settings.isPro = data.isPro
+                settings.proExpiresAt = data.expiresAt ?? ""
+                settings.persistCredentials()
+                activating = false
+                showActivate = false
+                activationCode = ""
             }
+        } catch {
+            await MainActor.run { activationError = error.localizedDescription; activating = false }
         }
+    }
+
+    private func formatExpiry(_ s: String) -> String {
+        let s = s.trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty else { return "" }
+        let out = DateFormatter(); out.dateFormat = "yyyy-MM-dd"
+        if let d = ISO8601DateFormatter().date(from: s) { return out.string(from: d) }
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; f.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        if let d = f.date(from: s) { return out.string(from: d) }
+        return String(s.prefix(10))
     }
 
     private func uploadAvatar(_ image: UIImage) {
@@ -251,5 +325,37 @@ extension UIImage {
         let result = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         return result
+    }
+}
+
+/// 内嵌更新日志页（不发外链、不依赖开源仓库）。
+struct ChangelogView: View {
+    var body: some View {
+        List {
+            Section("v1.0.10") {
+                Label("移除昵称，账号区仅展示邮箱", systemImage: "checkmark")
+                Label("「我的」新增：退出登录、激活码开通会员、会员状态刷新", systemImage: "checkmark")
+                Label("账号区显示会员到期时间", systemImage: "checkmark")
+                Label("每页条数切换即时生效（无需后退重进）", systemImage: "checkmark")
+                Label("登录成功自动关闭登录页；错误带红色提示", systemImage: "checkmark")
+                Label("查看建表 SQL 首次打开即正常加载", systemImage: "checkmark")
+                Label("关于页改为内嵌更新日志，移除开源仓库外链", systemImage: "checkmark")
+            }
+            Section("v1.0.9") {
+                Text("· 查看建表 SQL：缩进排版 + 语法高亮 + 双指缩放 + 复制")
+                Text("· 数据表格（查询 / 表浏览）支持双指缩放")
+                Text("· 我的页重排：账号置顶、外观第二；移除查询设置与分享")
+                Text("· 登录 / 注册 / 找回密码三态，支持第三方输入法")
+            }
+            Section("v1.0.8") {
+                Text("· 意见反馈入口与后端反馈接口")
+                Text("· 防爆破：登录 / 激活 / 管理员接口限流")
+            }
+            Section("更早版本") {
+                Text("· 基础连接、表浏览、查询控制台、数据导出")
+            }
+        }
+        .navigationTitle("更新日志")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

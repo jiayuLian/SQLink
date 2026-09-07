@@ -80,12 +80,12 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.9
-          name: SQLink v1.0.9
+          tag_name: v1.0.10
+          name: SQLink v1.0.10
           files: SQLink/SQLink.ipa
           fail_on_unmatched_files: false
           body: |
-            ## SQLink v1.0.9（集成测试版，不含 IAP）
+            ## SQLink v1.0.10（集成测试版，不含 IAP）
 
             ### 本次更新
             - 「我的」页重排：账号置顶、外观第二；未登录时仅显示「登录/注册」入口且不显示退出按钮，登录后账号右侧显示「免费版 / 会员版」；移除服务器地址、会员栏、分享 App 等入口

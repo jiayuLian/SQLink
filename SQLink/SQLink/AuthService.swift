@@ -24,7 +24,6 @@ struct APIResponse<T: Decodable>: Decodable {
 struct AuthTokenData: Decodable {
     let token: String?
     let email: String?
-    let nickname: String?
     let isPro: Bool?
     let expiresAt: String?
     let code: String?
@@ -32,18 +31,11 @@ struct AuthTokenData: Decodable {
 
 struct MembershipData: Decodable {
     let email: String?
-    let nickname: String?
     let avatar: String?
     let isPro: Bool
     let proType: String?
     let expiresAt: String?
     let remark: String?
-}
-
-/// 修改昵称 / 资料后返回的数据。
-struct ProfileData: Decodable {
-    let nickname: String?
-    let avatar: String?
 }
 
 struct AvatarData: Decodable {
@@ -106,20 +98,20 @@ final class AuthService {
         return nil
     }
 
-    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, nickname: String, isPro: Bool, expiresAt: String?) {
+    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, isPro: Bool, expiresAt: String?) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/register", body: ["email": email, "code": code, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.nickname ?? "", d.isPro ?? false, d.expiresAt)
+        return (token, email, d.isPro ?? false, d.expiresAt)
     }
 
-    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, nickname: String, isPro: Bool, expiresAt: String?) {
+    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, isPro: Bool, expiresAt: String?) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/login", body: ["email": email, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.nickname ?? "", d.isPro ?? false, d.expiresAt)
+        return (token, email, d.isPro ?? false, d.expiresAt)
     }
 
     func sendResetCode(baseURL: String, email: String) async throws -> String? {
@@ -155,12 +147,6 @@ final class AuthService {
             throw AuthError.message(resp.message)
         }
         return url
-    }
-
-    /// 修改昵称。
-    func updateProfile(baseURL: String, token: String, nickname: String) async throws {
-        let resp: APIResponse<ProfileData> = try await request(baseURL: baseURL, path: "/api/user/profile", token: token, body: ["nickname": nickname])
-        if resp.code != 200 { throw AuthError.message(resp.message) }
     }
 
     /// 激活码兑换：凭码自助开通会员（年卡 / 永久卡），返回最新会员状态。

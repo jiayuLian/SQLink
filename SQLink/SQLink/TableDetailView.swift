@@ -207,7 +207,7 @@ struct TableDetailView: View {
                         }
                     }
                 }
-                Button { Task { await loadDDL() } } label: {
+                Button { showDDL = true } label: {
                     Label("查看建表 SQL", systemImage: "doc.plaintext")
                 }
             }
@@ -319,6 +319,7 @@ struct TableDetailView: View {
                     }
                 }
             }
+            .task { await loadDDL() }
         }
     }
 
@@ -329,13 +330,11 @@ struct TableDetailView: View {
             await MainActor.run {
                 self.ddlText = sql
                 self.ddlLoading = false
-                self.showDDL = true
             }
         } catch {
             await MainActor.run {
                 self.ddlError = error.localizedDescription
                 self.ddlLoading = false
-                self.showDDL = true
             }
         }
     }
@@ -668,6 +667,7 @@ struct TableDataView: View {
             .onChange(of: page) { _ in
                 Task { await load() }
             }
+            .onChange(of: settings.pageSize) { _ in Task { await load() } }
             .task { await load() }
     }
 
