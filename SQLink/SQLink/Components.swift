@@ -42,7 +42,7 @@ struct ConnectionRow: View {
 }
 
 /// Clean, scrollable result grid (Navicat-style). 真实主键列以 🔑 标记并高亮，便于一眼确认真实 ID。
-/// 长文本会被截断显示，点击单元格可查看完整值并复制；编辑模式请使用 EditableGridView。
+/// 长文本会被截断显示，点击/长按单元格可查看完整值并复制。
 struct ResultGridView: View {
     let columns: [ColumnDef]
     let rows: [[String?]]
@@ -81,48 +81,62 @@ struct ResultGridView: View {
     private var headerRow: some View {
         HStack(spacing: 0) {
             ForEach(columns) { c in
-                let isPK = primaryKey.map { c.name == $0 } ?? false
-                Text((isPK ? "🔑 " : "") + c.name)
-                    .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
-                    .padding(6 * scale)
-                    .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
+                headerCell(c)
             }
         }
+    }
+
+    @ViewBuilder
+    private func headerCell(_ c: ColumnDef) -> some View {
+        let isPK = primaryKey.map { c.name == $0 } ?? false
+        let label = (isPK ? "🔑 " : "") + c.name
+        Text(label)
+            .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .padding(6 * scale)
+            .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
     }
 
     private func dataRow(ri: Int) -> some View {
         let row = rows[ri]
         return HStack(spacing: 0) {
-            ForEach(0..<columns.count, id: \.self) { j in
-                let isPK = pkIndex.map { $0 == j } ?? false
-                let v = row[safe: j]
-                let display = v == nil ? "NULL" : (v! ?? "")
-                Text(display)
-                    .font(.system(size: 12 * scale, design: .monospaced))
-                    .foregroundColor(v == nil ? .secondary : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
-                    .padding(6 * scale)
-                    .background(isPK ? Color.accentColor.opacity(0.10) : ((ri + j) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear))
-                    .contextMenu {
-                        if v != nil {
-                            Button { UIPasteboard.general.string = v! ?? "" }
-                                label: { Label("复制值", systemImage: "doc.on.doc") }
-                            Button { selectedCell = SelectedCell(row: ri, col: j, value: v!) }
-                                label: { Label("查看完整值", systemImage: "eye") }
-                        } else {
-                            Button { } label: { Label("NULL（无值）", systemImage: "nosign") }
-                                .disabled(true)
-                        }
-                    }
-                    .onTapGesture {
-                        selectedCell = SelectedCell(row: ri, col: j, value: v)
-                    }
+            ForEach(0..<columns.count, id: \.self) { ci in
+                resultCell(ri: ri, ci: ci, value: row[safe: ci])
             }
+        }
+    }
+
+    @ViewBuilder
+    private func resultCell(ri: Int, ci: Int, value: String?) -> some View {
+        let isPK = pkIndex.map { $0 == ci } ?? false
+        let display = value == nil ? "NULL" : (value! ?? "")
+        let text = Text(display)
+            .font(.system(size: 12 * scale, design: .monospaced))
+            .foregroundColor(value == nil ? .secondary : .primary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+        let background = isPK ? Color.accentColor.opacity(0.10) : ((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
+
+        text
+            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .padding(6 * scale)
+            .background(background)
+            .contextMenu { resultCellMenu(value: value, row: ri, col: ci) }
+            .onTapGesture { selectedCell = SelectedCell(row: ri, col: ci, value: value) }
+    }
+
+    @ViewBuilder
+    private func resultCellMenu(value: String?, row: Int, col: Int) -> some View {
+        if let value = value {
+            Button { UIPasteboard.general.string = value }
+                label: { Label("复制值", systemImage: "doc.on.doc") }
+            Button { selectedCell = SelectedCell(row: row, col: col, value: value) }
+                label: { Label("查看完整值", systemImage: "eye") }
+        } else {
+            Button { } label: { Label("NULL（无值）", systemImage: "nosign") }
+                .disabled(true)
         }
     }
 }
@@ -180,47 +194,70 @@ struct EditableGridView: View {
     private var headerRow: some View {
         HStack(spacing: 0) {
             ForEach(0..<columns.count, id: \.self) { ci in
-                let isPK = primaryKey.map { columns[ci].field == $0 } ?? false
-                Text((isPK ? "🔑🔒 " : "") + columns[ci].field)
-                    .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
-                    .padding(6 * scale)
-                    .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
+                editableHeaderCell(ci)
             }
         }
+    }
+
+    @ViewBuilder
+    private func editableHeaderCell(_ ci: Int) -> some View {
+        let isPK = pkIndex.map { $0 == ci } ?? false
+        let label = (isPK ? "🔑🔒 " : "") + columns[ci].field
+        Text(label)
+            .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .padding(6 * scale)
+            .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
     }
 
     private func dataRow(ri: Int) -> some View {
         HStack(spacing: 0) {
             ForEach(0..<columns.count, id: \.self) { ci in
-                let isPK = pkIndex.map { $0 == ci } ?? false
-                if isPK {
-                    Text(rows[ri][ci] == nil ? "NULL" : (rows[ri][ci] ?? ""))
-                        .font(.system(size: 12 * scale, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
-                        .padding(6 * scale)
-                        .background(Color.accentColor.opacity(0.10))
-                } else {
-                    TextField(rows[ri][ci] == nil ? "NULL" : "",
-                              text: binding(for: ri, ci))
-                        .font(.system(size: 12 * scale, design: .monospaced))
-                        .foregroundColor(rows[ri][ci] == nil ? .secondary : .primary)
-                        .lineLimit(1)
-                        .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
-                        .padding(6 * scale)
-                        .background((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
-                        .contextMenu {
-                            Button { editTarget = EditTarget(ri: ri, ci: ci) }
-                                label: { Label("编辑完整值", systemImage: "square.and.pencil") }
-                        }
-                }
+                editableCell(ri: ri, ci: ci)
             }
         }
+    }
+
+    @ViewBuilder
+    private func editableCell(ri: Int, ci: Int) -> some View {
+        let isPK = pkIndex.map { $0 == ci } ?? false
+        if isPK {
+            pkCell(ri: ri, ci: ci)
+        } else {
+            valueCell(ri: ri, ci: ci)
+        }
+    }
+
+    @ViewBuilder
+    private func pkCell(ri: Int, ci: Int) -> some View {
+        let text = rows[ri][ci] == nil ? "NULL" : (rows[ri][ci] ?? "")
+        Text(text)
+            .font(.system(size: 12 * scale, design: .monospaced))
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .padding(6 * scale)
+            .background(Color.accentColor.opacity(0.10))
+    }
+
+    @ViewBuilder
+    private func valueCell(ri: Int, ci: Int) -> some View {
+        let background = (ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear
+        TextField(rows[ri][ci] == nil ? "NULL" : "",
+                  text: binding(for: ri, ci))
+            .font(.system(size: 12 * scale, design: .monospaced))
+            .foregroundColor(rows[ri][ci] == nil ? .secondary : .primary)
+            .lineLimit(1)
+            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .padding(6 * scale)
+            .background(background)
+            .contextMenu {
+                Button { editTarget = EditTarget(ri: ri, ci: ci) }
+                    label: { Label("编辑完整值", systemImage: "square.and.pencil") }
+            }
     }
 }
 
