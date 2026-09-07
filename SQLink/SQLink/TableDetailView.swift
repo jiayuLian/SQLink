@@ -421,9 +421,7 @@ struct TableFilterView: View {
     @State private var draftSortField: String = ""
     @State private var draftSortDirection: SortDirection = .asc
     @State private var draftFilterLogic: FilterLogic = .and
-    // 建议值统一由父级加载并缓存：避免每个条件行各自跑异步任务、在行销毁后写回 @State 导致闪退。
-    @State private var suggestionsByField: [String: [String]] = [:]
-    @State private var loadingFields: Set<String> = []
+    // 建议值自动加载已临时移除：原方案在弹窗关闭后异步任务会写回已释放的 @State 导致闪退。
 
     var body: some View {
         VStack(spacing: 0) {
@@ -465,13 +463,12 @@ struct TableFilterView: View {
 
                 ForEach($draftConditions) { $c in
                     let cid = $c.wrappedValue.id
-                    let field = $c.wrappedValue.field
                     Section {
                         FilterConditionRow(condition: $c,
                                            showLogic: $c.wrappedValue.logic != nil,
                                            fields: fieldNames,
-                                           suggestions: suggestions(for: field),
-                                           loading: isLoading(field: field),
+                                           suggestions: [],
+                                           loading: false,
                                            onDelete: { removeCondition(id: cid) })
                     }
                 }
@@ -498,7 +495,6 @@ struct TableFilterView: View {
             draftFilterLogic = filterLogic
             if !draftSortField.isEmpty && !fieldNames.contains(draftSortField) { draftSortField = "" }
         }
-        .task { await loadAllSuggestions() }
     }
 
     private func addCondition() {
@@ -515,37 +511,13 @@ struct TableFilterView: View {
         }
     }
 
-    // 父级统一加载所有字段的建议值并缓存，条件行只读取缓存，自身不再跑异步任务。
-    private func loadAllSuggestions() async {
-        for f in fieldNames where !f.isEmpty {
-            guard suggestionsByField[f] == nil else { continue }
-            await MainActor.run { loadingFields.insert(f) }
-            do {
-                let vals = try await connection.distinctValues(db: db, table: table, column: f, limit: 100)
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    suggestionsByField[f] = vals
-                    loadingFields.remove(f)
-                }
-            } catch {
-                await MainActor.run { loadingFields.remove(f) }
-            }
-        }
-    }
-
-    private func suggestions(for field: String) -> [String] {
-        suggestionsByField[field] ?? []
-    }
-
-    private func isLoading(field: String) -> Bool {
-        loadingFields.contains(field)
-    }
+    // 建议值加载功能已临时移除（见上方说明），回归稳定优先。
 
 }
 
 // MARK: - Filter condition row
-/// 条件行现在只被动读取父级缓存的建议值，自身不再持有 @State 或跑异步任务，
-/// 从而根除「行销毁后异步任务写回 @State 导致闪退」的问题。
+/// 条件行纯粹由绑定驱动，自身不持有 @State、不跑异步任务，
+/// 因此弹窗关闭/行销毁时不存在任何后台任务去写已释放的视图存储。
 struct FilterConditionRow: View {
     @Binding var condition: FilterCondition
     let showLogic: Bool
