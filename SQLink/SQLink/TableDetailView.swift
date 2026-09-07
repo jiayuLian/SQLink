@@ -461,12 +461,13 @@ struct TableFilterView: View {
                 }
 
                 ForEach($draftConditions) { $c in
+                    let cid = $c.wrappedValue.id
                     Section {
                         FilterConditionRow(condition: $c,
                                            showLogic: $c.wrappedValue.logic != nil,
                                            fields: fieldNames,
                                            db: db, table: table, connection: connection,
-                                           onDelete: { draftConditions.removeAll { $0.id == $c.wrappedValue.id } })
+                                           onDelete: { removeCondition(id: cid) })
                     }
                 }
 
@@ -498,6 +499,14 @@ struct TableFilterView: View {
         let field = fieldNames.first ?? ""
         let logic: FilterLogic? = draftConditions.isEmpty ? nil : .and
         draftConditions.append(FilterCondition(field: field, op: .contains, value: "", enabled: true, logic: logic))
+    }
+
+    private func removeCondition(id: UUID) {
+        draftConditions.removeAll { $0.id == id }
+        // 删除后剩余条件的首条不应再显示 AND/OR 关系（它前面没有其它条件）。
+        if !draftConditions.isEmpty {
+            draftConditions[0].logic = nil
+        }
     }
 
 }
@@ -566,23 +575,30 @@ struct FilterConditionRow: View {
                 }
             }
         }
-        .onAppear { loadSuggestions(for: condition.field) }
-        .onChange(of: condition.field) { loadSuggestions(for: $0) }
+        // 用 .task(id:) 代替 onAppear + onChange：字段变化/视图销毁时旧任务自动取消，
+        // 避免异步任务在 row 被删除或弹窗关闭后还去改 @State 导致闪退。
+        .task(id: condition.field) {
+            await loadSuggestions(for: condition.field)
+        }
     }
 
-    private func loadSuggestions(for field: String) {
-        guard !field.isEmpty else { suggestions = []; loadingSuggestions = false; return }
-        loadingSuggestions = true; suggestions = []
-        Task {
-            do {
-                let vals = try await connection.distinctValues(db: db, table: table, column: field, limit: 100)
-                await MainActor.run {
-                    suggestions = vals
-                    loadingSuggestions = false
-                }
-            } catch {
-                await MainActor.run { loadingSuggestions = false }
-            }
+    private func loadSuggestions(for field: String) async {
+        guard !field.isEmpty else {
+            suggestions = []
+            loadingSuggestions = false
+            return
+        }
+        loadingSuggestions = true
+        suggestions = []
+        do {
+            let vals = try await connection.distinctValues(db: db, table: table, column: field, limit: 100)
+            // 视图已消失（被删除 / 弹窗关闭）时，不再写回 @State。
+            guard !Task.isCancelled else { return }
+            suggestions = vals
+            loadingSuggestions = false
+        } catch {
+            guard !Task.isCancelled else { return }
+            loadingSuggestions = false
         }
     }
 }
