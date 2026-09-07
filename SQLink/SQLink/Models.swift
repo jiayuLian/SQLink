@@ -45,7 +45,7 @@ struct ConnectionProfile: Identifiable, Codable, Hashable {
     var trustSelfSigned: Bool
 
     init(id: UUID = UUID(), name: String = "", host: String = "", port: Int = 3306,
-         user: String = "root", database: String = "", useTLS: Bool = false, trustSelfSigned: Bool = false) {
+         user: String = "root", database: String = "", useTLS: Bool = true, trustSelfSigned: Bool = true) {
         self.id = id
         self.name = name
         self.host = host
@@ -253,7 +253,14 @@ final class AppSettings: ObservableObject {
         } else {
             self.plan = .default
         }
-        // 抗卸载：本机无登录态时，尝试从 iCloud Keychain 恢复（重装/换机，同 Apple ID）。
+        // 卸载即重置：UserDefaults 在卸载时会被系统清除，而 Keychain 不会。
+        // 用 UserDefaults 标记是否曾运行过；全新安装 / 重装（标记缺失）时清空可能残留的 Keychain 登录态，
+        // 这样重装后必须重新登录（真正的「卸载即重置」）。同一安装内的正常启动标记已存在，不做清空。
+        let installMarkerKey = "sqlink.installed"
+        if d.object(forKey: installMarkerKey) == nil {
+            KeychainHelper.clearLogin()
+            d.set(true, forKey: installMarkerKey)
+        }
         restoreFromKeychainIfNeeded()
     }
 
@@ -287,7 +294,8 @@ final class AppSettings: ObservableObject {
         persistCredentials()
     }
 
-    /// 持久化当前凭据：登录态与会员态均存【本地】Keychain（卸载即清空，无 iCloud 同步）。
+    /// 持久化当前凭据：登录态与会员态均存【本地】Keychain（无 iCloud 同步）。
+    /// 注意：Keychain 在卸载后仍残留，真正的「卸载即重置」由 init 的安装标记处理。
     /// 会员状态以服务器为准，每次启动 / 登录 / 激活后都会通过 refreshMembership() 重新拉取。
     /// 仅当已登录时有意义。
     func persistCredentials() {
@@ -301,8 +309,9 @@ final class AppSettings: ObservableObject {
     }
 
     /// 启动 / 重装 / 换机时恢复凭据。
-    /// 登录态与会员态均仅从【本地】Keychain 读取：iOS 卸载会清除本地 Keychain，
-    /// 因此重装后两者皆为空、需重新登录（满足「卸载即重置」）。
+    /// 登录态与会员态均仅从【本地】Keychain 读取；但 Keychain 在卸载后仍残留，
+    /// 故由 init 的「安装标记」在首次启动（重装）时先 clearLogin()，
+    /// 之后此处恢复为空、需重新登录（实现「卸载即重置」）。
     private func restoreFromKeychainIfNeeded() {
         guard authToken.isEmpty else { return }            // 本机已有登录态则不覆盖
         guard let token = KeychainHelper.loadLogin(KeychainHelper.authTokenLoginKey), !token.isEmpty else { return }

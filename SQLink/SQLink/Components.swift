@@ -131,7 +131,7 @@ struct EditableGridView: View {
                 HStack(spacing: 0) {
                     ForEach(0..<columns.count, id: \.self) { ci in
                         let isPK = primaryKey.map { columns[ci].field == $0 } ?? false
-                        Text((isPK ? "🔑 " : "") + columns[ci].field)
+                        Text((isPK ? "🔑🔒 " : "") + columns[ci].field)
                             .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
                             .frame(minWidth: 120 * scale, alignment: .leading)
                             .padding(6 * scale)
@@ -142,13 +142,23 @@ struct EditableGridView: View {
                     HStack(spacing: 0) {
                         ForEach(0..<columns.count, id: \.self) { ci in
                             let isPK = primaryKey.map { columns[ci].field == $0 } ?? false
-                            TextField(rows[ri][ci] == nil ? "NULL" : "",
-                                      text: binding(for: ri, ci))
-                                .font(.system(size: 12 * scale, design: .monospaced))
-                                .foregroundColor(rows[ri][ci] == nil ? .secondary : .primary)
-                                .frame(minWidth: 120 * scale, alignment: .leading)
-                                .padding(6 * scale)
-                                .background(isPK ? Color.accentColor.opacity(0.10) : ((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear))
+                            if isPK {
+                                // 主键列：编辑态只读，避免误改导致定位锚丢失 / 主键冲突
+                                Text(rows[ri][ci] == nil ? "NULL" : (rows[ri][ci] ?? ""))
+                                    .font(.system(size: 12 * scale, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                    .frame(minWidth: 120 * scale, alignment: .leading)
+                                    .padding(6 * scale)
+                                    .background(Color.accentColor.opacity(0.10))
+                            } else {
+                                TextField(rows[ri][ci] == nil ? "NULL" : "",
+                                          text: binding(for: ri, ci))
+                                    .font(.system(size: 12 * scale, design: .monospaced))
+                                    .foregroundColor(rows[ri][ci] == nil ? .secondary : .primary)
+                                    .frame(minWidth: 120 * scale, alignment: .leading)
+                                    .padding(6 * scale)
+                                    .background((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
+                            }
                         }
                     }
                 }

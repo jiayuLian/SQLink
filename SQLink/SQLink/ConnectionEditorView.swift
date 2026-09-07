@@ -12,10 +12,9 @@ struct ConnectionEditorView: View {
     @State private var password: String
     @State private var database: String
     @State private var useTLS: Bool
-    @State private var trustSelfSigned: Bool
     @State private var testMessage: String?
     @State private var testing = false
-    @State private var showPwd = true
+    @State private var showPwd = false
 
     private var isNew: Bool {
         !store.profiles.contains(where: { $0.id == target.id })
@@ -30,7 +29,6 @@ struct ConnectionEditorView: View {
         _password = State(initialValue: "")
         _database = State(initialValue: target.database)
         _useTLS = State(initialValue: target.useTLS)
-        _trustSelfSigned = State(initialValue: target.trustSelfSigned)
     }
 
     var body: some View {
@@ -55,11 +53,10 @@ struct ConnectionEditorView: View {
                         .textInputAutocapitalization(.never)
                 }
                 Section("安全") {
-                    Toggle("使用 TLS 加密连接", isOn: $useTLS)
-                    if useTLS {
-                        Toggle("信任自签名证书", isOn: $trustSelfSigned)
-                            .foregroundColor(.secondary)
-                    }
+                    Toggle("使用 SSL 连接", isOn: $useTLS)
+                    Text("已启用加密传输，并自动信任自签名证书（适用于自建服务器）。关闭后将使用明文连接。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                 }
                 if let msg = testMessage {
                     Section { Text(msg).font(.footnote).foregroundColor(msg.contains("成功") ? .green : .red) }
@@ -99,7 +96,7 @@ struct ConnectionEditorView: View {
             user: user.isEmpty ? "root" : user,
             database: database,
             useTLS: useTLS,
-            trustSelfSigned: trustSelfSigned
+            trustSelfSigned: useTLS
         )
     }
 

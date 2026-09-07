@@ -53,6 +53,7 @@ private struct LoginForm: View {
     @Environment(\.dismiss) private var dismiss
     @State private var email = ""
     @State private var password = ""
+    @State private var showPwd = false
     @State private var loading = false
     @State private var error: String?
 
@@ -108,11 +109,12 @@ private struct LoginForm: View {
 
 private struct RegisterForm: View {
     @EnvironmentObject var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
     let onRegistered: () -> Void
     @State private var email = ""
     @State private var code = ""
     @State private var password = ""
-    @State private var showPwd = true
+    @State private var showPwd = false
     @State private var confirm = ""
     @State private var loading = false
     @State private var sending = false
@@ -207,6 +209,7 @@ private struct RegisterForm: View {
                 await MainActor.run {
                     settings.applyMembership(result.email, token: result.token, isPro: result.isPro, expiresAt: result.expiresAt ?? "")
                     loading = false
+                    dismiss()
                 }
             } catch {
                 await MainActor.run { self.error = error.localizedDescription; self.loading = false }
@@ -221,6 +224,7 @@ private struct ForgotPasswordForm: View {
     @State private var email = ""
     @State private var code = ""
     @State private var password = ""
+    @State private var showPwd = false
     @State private var confirm = ""
     @State private var sending = false
     @State private var loading = false

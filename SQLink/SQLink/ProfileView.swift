@@ -4,7 +4,6 @@ import SwiftUI
 /// 登录态非强制：未登录时仅显示登录入口；点击头像/账号可跳转登录或选择头像。
 struct ProfileView: View {
     @EnvironmentObject var settings: AppSettings
-    @State private var showCopied = false
     @State private var showLogin = false
     @State private var showImagePicker = false
     @State private var uploading = false
@@ -15,6 +14,13 @@ struct ProfileView: View {
     @State private var activationCode = ""
     @State private var activating = false
     @State private var activationError: String?
+
+    // 账号操作：点击账号区弹出（更换头像 / 退出登录 / 注销账号）
+    @State private var showAccountMenu = false
+    @State private var showDeleteConfirm = false
+    @State private var showDeleteError = false
+    @State private var deleting = false
+    @State private var deleteError: String?
 
     private let authorWeChat = "cute6697"
     private let authorEmail = "lianjiayu998@163.com"
@@ -27,8 +33,7 @@ struct ProfileView: View {
                     HStack(spacing: 14) {
                         AvatarView(urlString: settings.avatarURL, size: 56)
                             .frame(width: 56, height: 56)
-                            .contentShape(Circle())
-                            .onTapGesture { avatarOrLogin() }   // 已登录→相册选头像；未登录→登录页
+                            .clipShape(Circle())
                         VStack(alignment: .leading, spacing: 4) {
                             if settings.isLoggedIn {
                                 Text(displayName)
@@ -47,9 +52,12 @@ struct ProfileView: View {
                                 Text("点击登录 / 注册").font(.caption).foregroundColor(.secondary)
                             }
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { if !settings.isLoggedIn { showLogin = true } }  // 进入登录/注册/找回密码
                         Spacer()
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if settings.isLoggedIn { showAccountMenu = true }
+                        else { showLogin = true }
                     }
 
                     if settings.isLoggedIn {
@@ -75,10 +83,6 @@ struct ProfileView: View {
                                 Label("激活码开通会员", systemImage: "key.fill")
                             }
                         }
-                        // 退出登录
-                        Button(role: .destructive) { confirmLogout = true } label: {
-                            Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
                     } else {
                         Button { showLogin = true } label: {
                             Label("登录 / 注册", systemImage: "person.crop.circle.badge.plus")
@@ -96,25 +100,10 @@ struct ProfileView: View {
                     .pickerStyle(.segmented)
                 }
 
-                // 4. 反馈与帮助
-                Section("反馈与帮助") {
-                    NavigationLink { FeedbackView() } label: {
-                        Label("意见反馈", systemImage: "bubble.left.and.bubble.right")
-                    }
-                }
-
-                // 5. 关于（含联系方式）
+                // 关于我们（点进去查看版本 / 联系作者 / 意见反馈）
                 Section("关于") {
-                    HStack { Text("版本"); Spacer(); Text("1.0.10").foregroundColor(.secondary) }
-                    HStack {
-                        Text("联系作者")
-                        Spacer()
-                        Text(authorWeChat).foregroundColor(.secondary)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { copyWeChat() }
-                    if let mailURL = URL(string: "mailto:\(authorEmail)") {
-                        Link("邮箱：\(authorEmail)", destination: mailURL)
+                    NavigationLink { AboutView() } label: {
+                        Label("关于我们", systemImage: "info.circle")
                     }
                 }
             }
@@ -126,10 +115,22 @@ struct ProfileView: View {
                     uploadAvatar(image)
                 }
             }
-            .alert("已复制", isPresented: $showCopied) {
+            .confirmationDialog("账号操作", isPresented: $showAccountMenu, titleVisibility: .visible) {
+                Button("更换头像") { showImagePicker = true }
+                Button("退出登录", role: .destructive) { confirmLogout = true }
+                Button("注销账号", role: .destructive) { showDeleteConfirm = true }
+                Button("取消", role: .cancel) {}
+            }
+            .alert("确认注销账号", isPresented: $showDeleteConfirm) {
+                Button("取消", role: .cancel) {}
+                Button("确认注销", role: .destructive) { Task { await deleteAccount() } }
+            } message: {
+                Text("注销后账号及云端数据（头像、反馈记录）将永久删除且无法恢复，确定要继续吗？")
+            }
+            .alert("注销失败", isPresented: $showDeleteError) {
                 Button("确定") {}
             } message: {
-                Text("微信号 \(authorWeChat) 已复制到剪贴板，添加时请备注你的注册邮箱，便于核对问题")
+                Text(deleteError ?? "未知错误")
             }
             .alert("确认退出登录", isPresented: $confirmLogout) {
                 Button("取消", role: .cancel) {}
@@ -137,6 +138,23 @@ struct ProfileView: View {
             } message: {
                 Text("退出后需重新登录，本机登录态将被清除（如不想被重装后自动恢复，请先退出再卸载）")
             }
+            .overlay {
+                if deleting {
+                    ZStack {
+                        Color.black.opacity(0.28).ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("正在注销账号…").font(.caption).foregroundColor(.white)
+                        }
+                        .padding(22)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(14)
+                        .shadow(radius: 8)
+                    }
+                    .ignoresSafeArea()
+                }
+            }
+            .disabled(deleting)
             .sheet(isPresented: $showActivate) {
                 NavigationView {
                     VStack(spacing: 16) {
@@ -181,19 +199,24 @@ struct ProfileView: View {
     }
 
     /// 未登录 → 跳登录；已登录 → 选头像（无「更换头像」文字，直接调相册）。
-    private func avatarOrLogin() {
-        if settings.isLoggedIn { showImagePicker = true } else { showLogin = true }
-    }
-
-    private func copyWeChat() {
-        UIPasteboard.general.string = authorWeChat
-        showCopied = true
-    }
-
     private func refreshProStatus() async {
         refreshing = true
         await settings.refreshMembership()
         await MainActor.run { refreshing = false }
+    }
+
+    /// 注销账号：删除云端账号与数据后清除本地登录态。
+    private func deleteAccount() async {
+        deleting = true; deleteError = nil
+        do {
+            try await AuthService.shared.deleteAccount(baseURL: settings.apiBaseURL, token: settings.authToken)
+            await MainActor.run {
+                deleting = false
+                settings.logout()
+            }
+        } catch {
+            await MainActor.run { deleteError = error.localizedDescription; deleting = false; showDeleteError = true }
+        }
     }
 
     private func redeemActivationCode() async {
@@ -324,6 +347,48 @@ extension UIImage {
         let result = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         return result
+    }
+}
+
+/// 关于我们：版本、联系作者统一收纳于此，从「我的」点进去查看。
+struct AboutView: View {
+    private let authorWeChat = "cute6697"
+    private let authorEmail = "lianjiayu998@163.com"
+    @State private var copied = false
+
+    var body: some View {
+        Form {
+            Section("版本") {
+                HStack { Text("当前版本"); Spacer(); Text("1.0.10").foregroundColor(.secondary) }
+            }
+            Section("联系作者") {
+                HStack {
+                    Text("微信号")
+                    Spacer()
+                    Text(authorWeChat).foregroundColor(.secondary)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    UIPasteboard.general.string = authorWeChat
+                    copied = true
+                }
+                if let mailURL = URL(string: "mailto:\(authorEmail)") {
+                    Link("邮箱：\(authorEmail)", destination: mailURL)
+                }
+            }
+            Section("反馈") {
+                NavigationLink { FeedbackView() } label: {
+                    Label("意见反馈", systemImage: "bubble.left.and.bubble.right")
+                }
+            }
+        }
+        .navigationTitle("关于我们")
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("已复制", isPresented: $copied) {
+            Button("确定") {}
+        } message: {
+            Text("微信号 \(authorWeChat) 已复制，添加时请备注你的注册邮箱，便于核对问题")
+        }
     }
 }
 

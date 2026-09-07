@@ -161,4 +161,11 @@ final class AuthService {
         let resp: APIResponse<EmptyData> = try await request(baseURL: baseURL, path: "/api/feedback", token: token, body: ["content": content, "contact": contact])
         if resp.code != 200 { throw AuthError.message(resp.message) }
     }
+
+    /// 注销账号（App Store 上架要求的账号删除能力）：凭当前 token 删除账号及云端数据。
+    /// 后端对应 POST /api/user/delete（删除 feedback → 删七牛头像 → 删 users）。
+    func deleteAccount(baseURL: String, token: String) async throws {
+        let resp: APIResponse<EmptyData> = try await request(baseURL: baseURL, path: "/api/user/delete", token: token, body: [:])
+        if resp.code != 200 { throw AuthError.message(resp.message) }
+    }
 }

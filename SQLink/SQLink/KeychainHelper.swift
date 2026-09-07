@@ -50,8 +50,9 @@ enum KeychainHelper {
     }
 
     // MARK: - 本地登录态 + 会员态存储（不 iCloud 同步）
-    // 全部持久化到本地 Keychain：iOS 卸载 App 会清除本地 Keychain，
-    // 因此重装后登录态与会员态都自动清空（满足「卸载即重置」诉求）。
+    // 持久化到本地 Keychain。注意：现代 iOS 卸载 App 并不会清除 Keychain，
+    // 因此仅靠 Keychain 无法实现「卸载即重置」——真正的重置由 AppSettings 在
+    // 首次启动（UserDefaults 安装标记缺失）时调用 clearLogin() 完成。
     // 会员状态每次启动 / 登录 / 激活后都会从服务器 refreshMembership() 重新拉取，无需 iCloud 备份。
     private static let loginService = "com.jiayu.sqlink.login"
     static let authTokenLoginKey = "authToken"

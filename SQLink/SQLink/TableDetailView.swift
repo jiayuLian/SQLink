@@ -213,16 +213,13 @@ struct TableDetailView: View {
             }
 
             Section {
-                HStack {
-                    Button { showFilter = true } label: {
-                        Label("筛选 & 排序", systemImage: "line.3.horizontal.decrease.circle")
-                    }
-                    Spacer()
-                    if activeWhere != nil || activeOrderBy != nil {
+                if activeWhere != nil || activeOrderBy != nil {
+                    HStack {
                         Text(filterStatusSummary)
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .lineLimit(1)
+                        Spacer()
                     }
                 }
             }
@@ -255,18 +252,15 @@ struct TableDetailView: View {
         }
         .navigationTitle(table)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showFilter) {
-            TableFilterView(columns: columns,
-                            conditions: $filterConditions,
-                            sortField: $sortField,
-                            sortDirection: $sortDirection,
-                            filterLogic: $filterLogic,
-                            db: db,
-                            table: table,
-                            connection: connection,
-                            onApply: { w, o in
-                                activeWhere = w; activeOrderBy = o
-                            })
+        .overlay {
+            if showFilter { filterOverlay }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { showFilter = true } label: {
+                    Label("筛选&排序", systemImage: "line.3.horizontal.decrease.circle")
+                }
+            }
         }
         .onChange(of: activeWhere) { _ in
             Task { await load() }
@@ -357,6 +351,34 @@ struct TableDetailView: View {
         return parts.joined(separator: "，")
     }
 
+    /// 自定义筛选弹窗 overlay（表详情页用），与 TableDataView 保持一致，避免 sheet dismiss 残留遮罩。
+    private var filterOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+                .onTapGesture { showFilter = false }
+            VStack(spacing: 0) {
+                TableFilterView(columns: columns,
+                                conditions: $filterConditions,
+                                sortField: $sortField,
+                                sortDirection: $sortDirection,
+                                filterLogic: $filterLogic,
+                                isPresented: $showFilter,
+                                db: db,
+                                table: table,
+                                connection: connection,
+                                onApply: { w, o in
+                                    activeWhere = w; activeOrderBy = o
+                                })
+            }
+            .background(Color(.systemBackground))
+            .cornerRadius(12)
+            .padding(.horizontal, 16)
+            .frame(maxHeight: UIScreen.main.bounds.height * 0.85)
+            .shadow(radius: 10)
+        }
+    }
+
     private func load() async {
         loading = true; error = nil
         do {
@@ -383,7 +405,8 @@ struct TableFilterView: View {
     @Binding var sortField: String
     @Binding var sortDirection: SortDirection
     @Binding var filterLogic: FilterLogic
-    @Environment(\.dismiss) private var dismiss
+    /// 显式绑定 sheet 的显示状态，避免 `dismiss()` 反向同步失败导致按钮被阻塞。
+    @Binding var isPresented: Bool
 
     let db: String
     let table: String
@@ -400,7 +423,38 @@ struct TableFilterView: View {
     @State private var draftFilterLogic: FilterLogic = .and
 
     var body: some View {
-        NavigationView {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button("取消") { DispatchQueue.main.async { isPresented = false } }
+                Spacer()
+                Text("筛选 & 排序").font(.headline)
+                Spacer()
+                HStack(spacing: 12) {
+                    Button("清除") {
+                        draftConditions = []
+                        draftSortField = ""; draftSortDirection = .asc
+                        draftFilterLogic = .and
+                    }
+                    Button("应用") {
+                        conditions = draftConditions
+                        sortField = draftSortField
+                        sortDirection = draftSortDirection
+                        filterLogic = draftFilterLogic
+                        let whereClause = buildWhereClause(conditions: conditions)
+                        let orderBy = buildOrderBy(field: sortField, direction: sortDirection)
+                        onApply(whereClause, orderBy)
+                        // 延迟到下一轮 runloop 再关闭 sheet：
+                        // 先让本次点击产生的多处 @Binding 变更落定，避免「变更 + 关闭」同帧竞争
+                        // 导致 sheet 未真正销毁、留下透明遮罩吞掉下层按钮的点击。
+                        DispatchQueue.main.async { isPresented = false }
+                    }
+                    .font(Font.body.weight(.semibold))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color(.secondarySystemBackground))
+            Divider()
             Form {
                 Section {
                     Button { addCondition() } label: { Label("添加筛选条件", systemImage: "plus") }
@@ -429,32 +483,7 @@ struct TableFilterView: View {
                     .pickerStyle(.segmented)
                 }
             }
-            .navigationTitle("筛选 & 排序")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("取消") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("清除") {
-                        draftConditions = []
-                        draftSortField = ""; draftSortDirection = .asc
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("应用") {
-                        conditions = draftConditions
-                        sortField = draftSortField
-                        sortDirection = draftSortDirection
-                        let whereClause = buildWhereClause(conditions: conditions)
-                        let orderBy = buildOrderBy(field: sortField, direction: sortDirection)
-                        onApply(whereClause, orderBy)
-                        // 延后一帧再关闭 sheet，确保 activeWhere/activeOrderBy 已提交，
-                        // 避免关闭动画与父视图状态提交竞争导致后续「编辑」点击失效。
-                        DispatchQueue.main.async { dismiss() }
-                    }
-                }
-            }
+            .frame(maxHeight: .infinity)
         }
         .onAppear {
             draftConditions = conditions
@@ -643,9 +672,9 @@ struct TableDataView: View {
         columns.first { $0.key == "PRI" }?.field ?? columns.first { $0.key == "UNI" }?.field
     }
 
-    /// 是否已应用筛选条件（带 WHERE）。整表裸查为 false，不显示编辑按钮。
+    /// 是否已应用筛选或排序条件（带 WHERE 或 ORDER BY）。整表裸查为 false，不显示编辑按钮。
     private var hasFilterCondition: Bool {
-        !(activeWhere?.isEmpty ?? true)
+        !(activeWhere?.isEmpty ?? true) || !(activeOrderBy?.isEmpty ?? true)
     }
 
     var body: some View {
@@ -653,17 +682,6 @@ struct TableDataView: View {
             .navigationTitle(table)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { dataToolbar }
-            .sheet(isPresented: $showFilter) {
-                TableFilterView(columns: columns,
-                                conditions: $conditions,
-                                sortField: $sortField,
-                                sortDirection: $sortDirection,
-                                filterLogic: $filterLogic,
-                                db: db, table: table, connection: connection,
-                                onApply: { w, o in
-                                    activeWhere = w; activeOrderBy = o
-                                })
-            }
             .onChange(of: activeWhere) { _ in page = 1; Task { await load() } }
             .onChange(of: activeOrderBy) { _ in page = 1; Task { await load() } }
             .onChange(of: page) { _ in
@@ -687,19 +705,8 @@ struct TableDataView: View {
                                 .font(.caption).foregroundColor(.secondary)
                         }
                         Spacer()
-                        Button { showFilter = true } label: {
-                            Label("筛选 & 排序", systemImage: "line.3.horizontal.decrease.circle")
-                                .font(.caption)
-                        }
-                        if editMode {
-                            Button("取消") { cancelEdit() }.font(.caption)
-                            Button { Task { await saveEdits() } } label: { Label("保存", systemImage: "checkmark") }
-                                .disabled(primaryKey == nil || !hasChanges)
-                        } else if settings.isPro && hasFilterCondition {
-                            Button { enterEdit() } label: { Label("编辑", systemImage: "square.and.pencil") }
-                            if primaryKey == nil {
-                                Text("⚠ 无主键/唯一键，不可保存").font(.caption2).foregroundColor(.orange).lineLimit(1)
-                            }
+                        if editMode && primaryKey == nil {
+                            Text("⚠ 无主键/唯一键，不可保存").font(.caption2).foregroundColor(.orange).lineLimit(1)
                         }
                     }
                     .padding(.horizontal, 10).padding(.vertical, 6)
@@ -718,8 +725,8 @@ struct TableDataView: View {
 
                     if editMode {
                         EditableGridView(columns: columns, rows: $editingValues,
-                                         originalRows: previewRows, scale: gridScale * gridMagnify,
-                                         primaryKey: primaryKey,
+                                         originalRows: previewRows, primaryKey: primaryKey,
+                                         scale: gridScale * gridMagnify,
                                          onChange: { hasChanges = true })
                             .frame(maxHeight: .infinity)
                             .contentShape(Rectangle())
@@ -732,7 +739,7 @@ struct TableDataView: View {
                             )
                             .onTapGesture(count: 2) { gridScale = 1 }
                     } else {
-                        ResultGridView(columns: previewCols, rows: previewRows, scale: gridScale * gridMagnify, primaryKey: primaryKey)
+                        ResultGridView(columns: previewCols, rows: previewRows, primaryKey: primaryKey, scale: gridScale * gridMagnify)
                             .frame(maxHeight: .infinity)
                             .contentShape(Rectangle())
                             .simultaneousGesture(
@@ -779,9 +786,38 @@ struct TableDataView: View {
                     .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(Color.gray.opacity(0.04))
                 }
-                // 导出进度遮罩
-                .overlay { if exportState.isExporting { exportOverlay } }
+                // 导出进度遮罩 与 筛选弹窗（用 overlay 替代 sheet，避免 iOS sheet dismiss 后留下透明遮罩吞掉 body 点击）
+                .overlay {
+                    if exportState.isExporting { exportOverlay }
+                    if showFilter { filterOverlay }
+                }
             }
+        }
+    }
+
+    /// 自定义筛选弹窗 overlay：背景遮罩 + 卡片式弹窗，不依赖 .sheet 的 presentationController。
+    private var filterOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+                .onTapGesture { showFilter = false }
+            VStack(spacing: 0) {
+                TableFilterView(columns: columns,
+                                conditions: $conditions,
+                                sortField: $sortField,
+                                sortDirection: $sortDirection,
+                                filterLogic: $filterLogic,
+                                isPresented: $showFilter,
+                                db: db, table: table, connection: connection,
+                                onApply: { w, o in
+                                    activeWhere = w; activeOrderBy = o
+                                })
+            }
+            .background(Color(.systemBackground))
+            .cornerRadius(12)
+            .padding(.horizontal, 16)
+            .frame(maxHeight: UIScreen.main.bounds.height * 0.85)
+            .shadow(radius: 10)
         }
     }
 
@@ -808,12 +844,32 @@ struct TableDataView: View {
 
     @ToolbarContentBuilder
     private var dataToolbar: some ToolbarContent {
-        // 导出：所有用户可用；免费版按免费额度限制行数，会员无限制。
+        // 把操作按钮放到工具栏（与「导出」同一交互层）。
+        // body 区域此前会被一层看不见的遮罩/手势层覆盖，导致筛选&排序/编辑失灵，
+        // 而工具栏在独立的 navigationBar 层、始终可点（用户实测「导出」一直能用即证明）。
+        // 因此将所有操作入口上移到工具栏，从根本规避 body 点击被吞的问题。
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button { showFilter = true } label: {
+                Label("筛选&排序", systemImage: "line.3.horizontal.decrease.circle")
+            }
+        }
         ToolbarItem(placement: .navigationBarTrailing) {
-            Menu {
-                Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
-                Button { exportAs(.sql) } label: { Label("导出 SQL", systemImage: "swiftdata") }
-            } label: { Label("导出", systemImage: "square.and.arrow.up") }
+            if editMode {
+                Button("取消") { cancelEdit() }
+            } else if settings.isPro && hasFilterCondition {
+                Button { enterEdit() } label: { Label("编辑", systemImage: "square.and.pencil") }
+            }
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            if editMode {
+                Button { Task { await saveEdits() } } label: { Label("保存", systemImage: "checkmark") }
+                    .disabled(primaryKey == nil || !hasChanges)
+            } else {
+                Menu {
+                    Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
+                    Button { exportAs(.sql) } label: { Label("导出 SQL", systemImage: "swiftdata") }
+                } label: { Label("导出", systemImage: "square.and.arrow.up") }
+            }
         }
     }
 
@@ -849,9 +905,9 @@ struct TableDataView: View {
         let offset = (safePage - 1) * pageSize
 
         async let cols = withReconnect { try await connection.listColumns(db: db, table: table) }
+        let c = try await cols
         async let prev = withReconnect { try await connection.fetchRows(db: db, table: table, limit: pageSize, offset: offset,
                                                  whereClause: activeWhere, orderBy: activeOrderBy) }
-        let c = try await cols
         let p = try await prev
         var pc = [ColumnDef](); var pr = [[String?]]()
         if case .result(let cc, let rr) = p { pc = cc; pr = rr }
