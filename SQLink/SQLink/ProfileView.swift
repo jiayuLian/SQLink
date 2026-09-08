@@ -109,7 +109,7 @@ struct ProfileView: View {
             }
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $showLogin) { AuthView() }
+            .sheet(isPresented: $showLogin) { AuthView(onDismiss: { showLogin = false }) }
             .sheet(isPresented: $showImagePicker) {
                 ImagePicker(sourceType: .photoLibrary) { image in
                     uploadAvatar(image)
