@@ -138,7 +138,7 @@ final class AuthService {
         return url
     }
 
-    /// 激活码兑换：凭码自助开通会员（年卡 / 永久卡），返回最新会员状态。
+    /// 激活码兑换：凭码自助开通永久会员，返回最新会员状态。
     func redeemActivation(baseURL: String, token: String, code: String) async throws -> MembershipData {
         let resp: APIResponse<MembershipData> = try await request(baseURL: baseURL, path: "/api/activation/redeem", token: token, body: ["code": code])
         guard resp.code == 200, let data = resp.data else { throw AuthError.message(resp.message) }

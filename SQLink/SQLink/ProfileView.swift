@@ -192,7 +192,7 @@ struct ProfileView: View {
             .sheet(isPresented: $showActivate) {
                 NavigationView {
                     VStack(spacing: 16) {
-                        Text("输入激活码自助开通会员（年卡 / 永久卡）").font(.caption).foregroundColor(.secondary)
+                        Text("输入激活码自助开通永久会员").font(.caption).foregroundColor(.secondary)
                         TextField("激活码", text: $activationCode)
                             .textFieldStyle(.roundedBorder)
                             .autocapitalization(.none)

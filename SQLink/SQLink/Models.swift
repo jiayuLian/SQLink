@@ -222,7 +222,7 @@ final class AppSettings: ObservableObject {
     @Published var guestMode: Bool {
         didSet { UserDefaults.standard.set(guestMode, forKey: "sqlink.guestMode") }
     }
-    /// 公共配置：免费额度 + 会员价格。由后端 /api/public/config 返回，本地缓存。
+    /// 公共配置：免费额度。由后端 /api/public/config 返回，本地缓存。
     @Published var plan: PlanConfig {
         didSet {
             if let d = try? JSONEncoder().encode(plan) {
@@ -317,7 +317,8 @@ final class AppSettings: ObservableObject {
     /// 不再向服务器发起会员校验请求（避免无网络时误判，也符合「会员认证不依赖后端」的设计）。
     /// 这里仅在冷启动时刷新公开配置（免费额度 / 价格），不涉及任何会员校验。
     func refreshConfig() async {
-        guard isLoggedIn, !authToken.isEmpty else { return }
+        // 会员无需免费额度配置，跳过 /api/public/config 请求（纯本地判定 isPro，本就不依赖后端）。
+        guard isLoggedIn, !authToken.isEmpty, !isPro else { return }
         await refreshPlan()
     }
 
