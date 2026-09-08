@@ -16,14 +16,14 @@ struct SQLinkApp: App {
             .preferredColorScheme(settings.theme == .dark ? .dark : .light)
             .environmentObject(store)
             .environmentObject(settings)
-            .task { await refreshMembershipIfNeeded() }
+            .task { await refreshConfigIfNeeded() }
             .onChange(of: settings.isLoggedIn) { _ in
-                Task { await refreshMembershipIfNeeded() }
+                Task { await refreshConfigIfNeeded() }
             }
         }
     }
 
-    private func refreshMembershipIfNeeded() async {
-        await settings.refreshMembership()
+    private func refreshConfigIfNeeded() async {
+        await settings.refreshConfig()
     }
 }

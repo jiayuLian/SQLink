@@ -219,10 +219,6 @@ final class AppSettings: ObservableObject {
     @Published var avatarURL: String {
         didSet { UserDefaults.standard.set(avatarURL, forKey: "sqlink.avatarURL") }
     }
-    /// 会员到期时间（ISO 字符串）。用于「服务器不可达」兜底：本地缓存判断会员是否仍在有效期。
-    @Published var proExpiresAt: String {
-        didSet { UserDefaults.standard.set(proExpiresAt, forKey: "sqlink.proExpiresAt") }
-    }
     @Published var guestMode: Bool {
         didSet { UserDefaults.standard.set(guestMode, forKey: "sqlink.guestMode") }
     }
@@ -245,7 +241,6 @@ final class AppSettings: ObservableObject {
         self.authToken = d.string(forKey: "sqlink.authToken") ?? ""
         self.authEmail = d.string(forKey: "sqlink.authEmail") ?? ""
         self.avatarURL = d.string(forKey: "sqlink.avatarURL") ?? ""
-        self.proExpiresAt = d.string(forKey: "sqlink.proExpiresAt") ?? ""
         self.guestMode = (d.object(forKey: "sqlink.guestMode") as? Bool) ?? false
         if let pd = d.data(forKey: "sqlink.plan"),
            let p = try? JSONDecoder().decode(PlanConfig.self, from: pd) {
@@ -270,7 +265,6 @@ final class AppSettings: ObservableObject {
         authToken = ""
         authEmail = ""
         avatarURL = ""
-        proExpiresAt = ""
         guestMode = false
         isPro = false
         // 清除【本地】Keychain 中的登录态与会员态，彻底登出（卸载即重置）。
@@ -284,27 +278,25 @@ final class AppSettings: ObservableObject {
         isPro = false
     }
 
-    func applyMembership(_ email: String, token: String, isPro: Bool, expiresAt: String = "") {
+    func applyMembership(_ email: String, token: String, isPro: Bool) {
         self.authEmail = email
         self.authToken = token
         self.guestMode = false
         self.isPro = isPro
-        self.proExpiresAt = expiresAt
         // 登录/注册成功后固化凭据：登录态与会员态均存【本地】Keychain（见 persistCredentials）。
         persistCredentials()
     }
 
     /// 持久化当前凭据：登录态与会员态均存【本地】Keychain（无 iCloud 同步）。
     /// 注意：Keychain 在卸载后仍残留，真正的「卸载即重置」由 init 的安装标记处理。
-    /// 会员状态以服务器为准，每次启动 / 登录 / 激活后都会通过 refreshMembership() 重新拉取。
+    /// 会员状态为本地永久判定（激活 / 登录时授予后即以本地 isPro 为准），不向服务器发会员校验请求。
     /// 仅当已登录时有意义。
     func persistCredentials() {
         guard !authToken.isEmpty else { return }
         // 登录态 → 本地 Keychain（不 iCloud 同步）
         KeychainHelper.saveLogin(authToken, for: KeychainHelper.authTokenLoginKey)
         KeychainHelper.saveLogin(authEmail, for: KeychainHelper.authEmailLoginKey)
-        // 会员态 → 本地 Keychain（与登录态同源，卸载即重置；服务器为准，启动即刷新）
-        KeychainHelper.saveLogin(proExpiresAt, for: KeychainHelper.proExpiresAtLoginKey)
+        // 会员态 → 本地 Keychain（与登录态同源，卸载即重置）
         KeychainHelper.saveLogin(isPro ? "1" : "0", for: KeychainHelper.isProLoginKey)
     }
 
@@ -318,45 +310,15 @@ final class AppSettings: ObservableObject {
         self.authToken = token
         self.authEmail = KeychainHelper.loadLogin(KeychainHelper.authEmailLoginKey) ?? ""
         // 登录态存在 → 从本地恢复会员态（重装后本就为空，需重新登录才会恢复）
-        self.proExpiresAt = KeychainHelper.loadLogin(KeychainHelper.proExpiresAtLoginKey) ?? ""
         self.isPro = KeychainHelper.loadLogin(KeychainHelper.isProLoginKey) == "1"
     }
 
-    /// 服务器不可达兜底：本地缓存判断会员是否仍有效。
-    /// 年卡：未过期则维持 Pro；永久（proExpiresAt 为空）且本地 isPro 为真则维持 Pro；其余降级免费。
-    func resolveProFallback() -> Bool {
-        guard isPro else { return false }
-        if proExpiresAt.isEmpty { return true } // lifetime
-        guard let exp = ISO8601DateFormatter().date(from: proExpiresAt)
-                ?? dateFromMySQL(proExpiresAt) else { return true }
-        return exp > Date()
-    }
-
-    private func dateFromMySQL(_ s: String) -> Date? {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        return f.date(from: s)
-    }
-
-    /// 刷新会员状态与账号资料（并刷新公开配置）。供冷启动、登录、手动「刷新会员状态」、激活码开通后调用。
-    /// 失败时降级为本地缓存兜底，已付费会员不会被误判为免费。
-    func refreshMembership() async {
+    /// 会员状态为【本地永久】判定：激活码兑换 / 登录时由后端授予后，本地 isPro 即为准，
+    /// 不再向服务器发起会员校验请求（避免无网络时误判，也符合「会员认证不依赖后端」的设计）。
+    /// 这里仅在冷启动时刷新公开配置（免费额度 / 价格），不涉及任何会员校验。
+    func refreshConfig() async {
         guard isLoggedIn, !authToken.isEmpty else { return }
         await refreshPlan()
-        do {
-            let data = try await AuthService.shared.fetchMembership(baseURL: apiBaseURL, token: authToken)
-            await MainActor.run {
-            if let email = data.email { self.authEmail = email }
-            self.isPro = data.isPro
-                self.proExpiresAt = data.expiresAt ?? ""
-                if let avatar = data.avatar, !avatar.isEmpty { self.avatarURL = avatar }
-                self.persistCredentials()
-            }
-        } catch {
-            await MainActor.run { self.isPro = self.resolveProFallback() }
-            print("刷新会员状态失败（已启用本地兜底）：\(error.localizedDescription)")
-        }
     }
 
     /// 拉取后端公共配置（免费额度 + 价格），失败则保留本地缓存。

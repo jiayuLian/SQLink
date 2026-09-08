@@ -53,11 +53,10 @@ enum KeychainHelper {
     // 持久化到本地 Keychain。注意：现代 iOS 卸载 App 并不会清除 Keychain，
     // 因此仅靠 Keychain 无法实现「卸载即重置」——真正的重置由 AppSettings 在
     // 首次启动（UserDefaults 安装标记缺失）时调用 clearLogin() 完成。
-    // 会员状态每次启动 / 登录 / 激活后都会从服务器 refreshMembership() 重新拉取，无需 iCloud 备份。
+    // 会员状态为本地永久判定（激活 / 登录授予后即以本地 isPro 为准），无需 iCloud 备份。
     private static let loginService = "com.jiayu.sqlink.login"
     static let authTokenLoginKey = "authToken"
     static let authEmailLoginKey = "authEmail"
-    static let proExpiresAtLoginKey = "proExpiresAt"
     static let isProLoginKey = "isPro"
 
     static func saveLogin(_ value: String, for key: String) {

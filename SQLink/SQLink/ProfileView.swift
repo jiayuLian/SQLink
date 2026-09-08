@@ -9,7 +9,6 @@ struct ProfileView: View {
     @State private var uploading = false
     @State private var avatarError: String?
     @State private var confirmLogout = false
-    @State private var refreshing = false
     @State private var showActivate = false
     @State private var activationCode = ""
     @State private var activating = false
@@ -45,13 +44,10 @@ struct ProfileView: View {
                                 Text(displayName)
                                     .font(.subheadline)
                                     .lineLimit(1)
-                                if !settings.isPro {
-                                    Text("免费版").font(.caption).foregroundColor(.secondary)
-                                } else if settings.proExpiresAt.isEmpty {
+                                if settings.isPro {
                                     Text("永久会员").font(.caption).foregroundColor(.accentColor)
                                 } else {
-                                    Text("会员版 · 到期 \(formatExpiry(settings.proExpiresAt))")
-                                        .font(.caption).foregroundColor(.accentColor)
+                                    Text("免费版").font(.caption).foregroundColor(.secondary)
                                 }
                             } else {
                                 Text("未登录").font(.subheadline)
@@ -70,20 +66,10 @@ struct ProfileView: View {
                         if let err = avatarError {
                             Text(err).font(.caption).foregroundColor(.red)
                         }
-                        // 会员区：非会员可激活码开通，会员可刷新状态
+                        // 会员区：非会员可激活码开通，会员显示永久会员标识（状态为本地判定，无需刷新）
                         if settings.isPro {
-                            HStack {
-                                Label("会员状态", systemImage: "checkmark.seal.fill")
-                                    .foregroundColor(.accentColor)
-                                Spacer()
-                                if refreshing {
-                                    ProgressView().scaleEffect(0.8)
-                                } else {
-                                    Button { Task { await refreshProStatus() } } label: {
-                                        Label("刷新状态", systemImage: "arrow.clockwise").font(.caption)
-                                    }
-                                }
-                            }
+                            Label("永久会员", systemImage: "checkmark.seal.fill")
+                                .foregroundColor(.accentColor)
                         } else {
                             Button { showActivate = true } label: {
                                 Label("激活码开通会员", systemImage: "key.fill")
@@ -238,30 +224,15 @@ struct ProfileView: View {
         }
     }
 
-    private var proLabel: String {
-        settings.proExpiresAt.isEmpty ? "永久会员" : "会员版"
-    }
-
     private var displayName: String {
         settings.authEmail.isEmpty ? "未登录" : settings.authEmail
-    }
-
-    /// 未登录 → 跳登录；已登录 → 选头像（无「更换头像」文字，直接调相册）。
-    private func refreshProStatus() async {
-        refreshing = true
-        await settings.refreshMembership()
-        await MainActor.run { refreshing = false }
     }
 
     /// 注销确认弹窗文案：若当前为会员，明确提示将失去会员权益且不予退还。
     private var deleteConfirmMessage: String {
         var msg = "注销后账号及云端数据（头像、反馈记录）将永久删除且无法恢复。"
         if settings.isPro {
-            if settings.proExpiresAt.isEmpty {
-                msg += "\n\n您当前为永久会员，注销后将立即失去会员权益且不予退还。"
-            } else {
-                msg += "\n\n您当前为会员（到期 \(formatExpiry(settings.proExpiresAt))），注销后将立即失去会员权益且不予退还。"
-            }
+            msg += "\n\n您当前为永久会员，注销后将立即失去会员权益且不予退还。"
         }
         msg += "\n\n点击「确认注销」后，还需输入登录密码确认。"
         return msg
@@ -306,7 +277,6 @@ struct ProfileView: View {
             let data = try await AuthService.shared.redeemActivation(baseURL: settings.apiBaseURL, token: settings.authToken, code: code)
             await MainActor.run {
                 settings.isPro = data.isPro
-                settings.proExpiresAt = data.expiresAt ?? ""
                 settings.persistCredentials()
                 activating = false
                 showActivate = false
@@ -315,16 +285,6 @@ struct ProfileView: View {
         } catch {
             await MainActor.run { activationError = error.localizedDescription; activating = false }
         }
-    }
-
-    private func formatExpiry(_ s: String) -> String {
-        let s = s.trimmingCharacters(in: .whitespaces)
-        guard !s.isEmpty else { return "" }
-        let out = DateFormatter(); out.dateFormat = "yyyy-MM-dd"
-        if let d = ISO8601DateFormatter().date(from: s) { return out.string(from: d) }
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        if let d = f.date(from: s) { return out.string(from: d) }
-        return String(s.prefix(10))
     }
 
     private func uploadAvatar(_ image: UIImage) {

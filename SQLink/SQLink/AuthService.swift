@@ -128,12 +128,6 @@ final class AuthService {
         if resp.code != 200 { throw AuthError.message(resp.message) }
     }
 
-    func fetchMembership(baseURL: String, token: String) async throws -> MembershipData {
-        let resp: APIResponse<MembershipData> = try await request(baseURL: baseURL, path: "/api/user/membership", token: token)
-        guard resp.code == 200, let data = resp.data else { throw AuthError.message(resp.message) }
-        return data
-    }
-
     func fetchPublicConfig(baseURL: String) async throws -> PlanConfig {
         let resp: APIResponse<PlanConfig> = try await request(baseURL: baseURL, path: "/api/public/config")
         guard resp.code == 200, let data = resp.data else { throw AuthError.message(resp.message) }
