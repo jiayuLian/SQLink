@@ -3,7 +3,16 @@ import SwiftUI
 /// 登录 / 注册 / 找回密码 三态视图
 struct AuthView: View {
     @EnvironmentObject var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
     @State private var mode: AuthMode = .login
+    /// 登录/注册成功后由外部（ProfileView）控制关闭弹窗；缺省回退到 dismiss()。
+    var onDismiss: (() -> Void)? = nil
+
+    /// 统一收口：优先走外部 onDismiss（直接置 showLogin=false），并回退 dismiss()。
+    private func finish() {
+        onDismiss?()
+        dismiss()
+    }
 
     enum AuthMode: String, CaseIterable, Identifiable {
         case login = "登录"
@@ -26,8 +35,8 @@ struct AuthView: View {
 
                 Group {
                     switch mode {
-                    case .login: LoginForm()
-                    case .register: RegisterForm(onRegistered: { mode = .login })
+                    case .login: LoginForm(onLoggedIn: { finish() })
+                    case .register: RegisterForm(onRegistered: { finish() })
                     case .forgot: ForgotPasswordForm(onDone: { mode = .login })
                     }
                 }
@@ -50,7 +59,7 @@ struct AuthView: View {
 
 private struct LoginForm: View {
     @EnvironmentObject var settings: AppSettings
-    @Environment(\.dismiss) private var dismiss
+    var onLoggedIn: () -> Void = {}
     @State private var email = ""
     @State private var password = ""
     @State private var showPwd = false
@@ -67,7 +76,7 @@ private struct LoginForm: View {
                 .frame(height: 44)
 
             HStack {
-                PasswordField(text: $password, placeholder: "密码", isSecure: $showPwd)
+                PasswordField(text: $password, placeholder: "密码", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
@@ -100,7 +109,7 @@ private struct LoginForm: View {
                 await MainActor.run {
                     settings.applyMembership(result.email, token: result.token, isPro: result.isPro, expiresAt: result.expiresAt ?? "")
                     loading = false
-                    dismiss()
+                    onLoggedIn()
                 }
             } catch {
                 await MainActor.run { self.error = error.localizedDescription; self.loading = false }
@@ -111,7 +120,6 @@ private struct LoginForm: View {
 
 private struct RegisterForm: View {
     @EnvironmentObject var settings: AppSettings
-    @Environment(\.dismiss) private var dismiss
     let onRegistered: () -> Void
     @State private var email = ""
     @State private var code = ""
@@ -149,7 +157,7 @@ private struct RegisterForm: View {
                 .frame(height: 44)
 
             HStack {
-                PasswordField(text: $password, placeholder: "密码（至少 6 位）", isSecure: $showPwd)
+                PasswordField(text: $password, placeholder: "密码（至少 6 位）", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
@@ -157,7 +165,7 @@ private struct RegisterForm: View {
                 }
             }
             HStack {
-                PasswordField(text: $confirm, placeholder: "确认密码", isSecure: $showPwd)
+                PasswordField(text: $confirm, placeholder: "确认密码", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
@@ -215,7 +223,7 @@ private struct RegisterForm: View {
                 await MainActor.run {
                     settings.applyMembership(result.email, token: result.token, isPro: result.isPro, expiresAt: result.expiresAt ?? "")
                     loading = false
-                    dismiss()
+                    onRegistered()
                 }
             } catch {
                 await MainActor.run { self.error = error.localizedDescription; self.loading = false }
@@ -262,7 +270,7 @@ private struct ForgotPasswordForm: View {
                 .frame(height: 44)
 
             HStack {
-                PasswordField(text: $password, placeholder: "新密码（至少 6 位）", isSecure: $showPwd)
+                PasswordField(text: $password, placeholder: "新密码（至少 6 位）", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
@@ -270,7 +278,7 @@ private struct ForgotPasswordForm: View {
                 }
             }
             HStack {
-                PasswordField(text: $confirm, placeholder: "确认新密码", isSecure: $showPwd)
+                PasswordField(text: $confirm, placeholder: "确认新密码", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
@@ -338,13 +346,14 @@ private struct ForgotPasswordForm: View {
     }
 }
 
-/// 密码输入：基于 UITextField 封装，带 👁 明文/密文切换。
+/// 密码输入框（UITextField 封装）。
+/// showPassword = true 时明文显示，false 时密文（圆点）显示；默认密文。
 /// 密文态（isSecureTextEntry = true）仍受 iOS 安全限制禁用第三方输入法；
 /// 点眼睛切到明文后 isSecureTextEntry = false，此时允许使用第三方键盘。
 struct PasswordField: UIViewRepresentable {
     @Binding var text: String
     var placeholder: String
-    @Binding var isSecure: Bool
+    @Binding var showPassword: Bool
 
     func makeUIView(context: Context) -> UITextField {
         let tf = UITextField()
@@ -359,7 +368,8 @@ struct PasswordField: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UITextField, context: Context) {
-        uiView.isSecureTextEntry = isSecure
+        // 注意语义：showPassword=true -> 明文(isSecureTextEntry=false)
+        uiView.isSecureTextEntry = !showPassword
         // 切换安全态后 iOS 可能清空文本，这里回写以保证输入不丢
         if uiView.text != text { uiView.text = text }
     }
