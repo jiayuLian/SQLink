@@ -43,7 +43,7 @@ struct ConnectionEditorView: View {
                     TextField("用户名", text: $user)
                         .textInputAutocapitalization(.never)
                     HStack {
-                        PasswordField(text: $password, placeholder: "密码", isSecure: $showPwd)
+                        PasswordField(text: $password, placeholder: "密码", showPassword: $showPwd)
                         Button { showPwd.toggle() } label: {
                             Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
                                 .foregroundColor(.secondary)
