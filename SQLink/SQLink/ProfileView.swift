@@ -22,6 +22,12 @@ struct ProfileView: View {
     @State private var deleting = false
     @State private var deleteError: String?
 
+    // 注销二次密码验证
+    @State private var showDeletePassword = false
+    @State private var deletePassword = ""
+    @State private var reauthing = false
+    @State private var reauthError: String?
+
     private let authorWeChat = "cute6697"
     private let authorEmail = "lianjiayu998@163.com"
 
@@ -123,14 +129,56 @@ struct ProfileView: View {
             }
             .alert("确认注销账号", isPresented: $showDeleteConfirm) {
                 Button("取消", role: .cancel) {}
-                Button("确认注销", role: .destructive) { Task { await deleteAccount() } }
+                Button("确认注销", role: .destructive) { showDeletePassword = true }
             } message: {
-                Text("注销后账号及云端数据（头像、反馈记录）将永久删除且无法恢复，确定要继续吗？")
+                Text(deleteConfirmMessage)
             }
             .alert("注销失败", isPresented: $showDeleteError) {
                 Button("确定") {}
             } message: {
                 Text(deleteError ?? "未知错误")
+            }
+            // 注销二次密码验证：确认弹窗通过后，要求重新输入登录密码，
+            // 校验通过（即本人操作）才真正调用删除接口。符合主流 App 防误删做法。
+            .sheet(isPresented: $showDeletePassword) {
+                NavigationView {
+                    VStack(spacing: 18) {
+                        Text("为确认是本人操作，请输入登录密码以完成注销。")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        TextField("登录密码", text: $deletePassword)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(height: 44)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                        if let e = reauthError {
+                            Text(e).foregroundColor(.red).font(.caption)
+                        }
+                        Button {
+                            Task { await reauthenticateAndDelete() }
+                        } label: {
+                            HStack {
+                                if reauthing { ProgressView().scaleEffect(0.8) }
+                                Text("确认注销")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                        .disabled(deletePassword.trimmingCharacters(in: .whitespaces).isEmpty || reauthing)
+                        Spacer()
+                    }
+                    .padding()
+                    .navigationTitle("确认注销")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("取消") { resetDeleteFlow() }
+                        }
+                    }
+                }
             }
             .alert("确认退出登录", isPresented: $confirmLogout) {
                 Button("取消", role: .cancel) {}
@@ -205,18 +253,50 @@ struct ProfileView: View {
         await MainActor.run { refreshing = false }
     }
 
-    /// 注销账号：删除云端账号与数据后清除本地登录态。
-    private func deleteAccount() async {
-        deleting = true; deleteError = nil
+    /// 注销确认弹窗文案：若当前为会员，明确提示将失去会员权益且不予退还。
+    private var deleteConfirmMessage: String {
+        var msg = "注销后账号及云端数据（头像、反馈记录）将永久删除且无法恢复。"
+        if settings.isPro {
+            if settings.proExpiresAt.isEmpty {
+                msg += "\n\n您当前为永久会员，注销后将立即失去会员权益且不予退还。"
+            } else {
+                msg += "\n\n您当前为会员（到期 \(formatExpiry(settings.proExpiresAt))），注销后将立即失去会员权益且不予退还。"
+            }
+        }
+        msg += "\n\n点击「确认注销」后，还需输入登录密码确认。"
+        return msg
+    }
+
+    /// 二次密码验证后注销：先用邮箱+密码重新登录确认是本人，成功后才真正删除云端账号。
+    private func reauthenticateAndDelete() async {
+        reauthing = true; reauthError = nil
+        let email = settings.authEmail
+        let pwd = deletePassword
         do {
+            // 重新登录校验密码（仅用于确认身份，不更新本地登录态）
+            _ = try await AuthService.shared.login(baseURL: settings.apiBaseURL, email: email, password: pwd)
+            // 密码正确，执行注销
             try await AuthService.shared.deleteAccount(baseURL: settings.apiBaseURL, token: settings.authToken)
             await MainActor.run {
-                deleting = false
+                reauthing = false
+                showDeletePassword = false
+                deletePassword = ""
                 settings.logout()
             }
         } catch {
-            await MainActor.run { deleteError = error.localizedDescription; deleting = false; showDeleteError = true }
+            await MainActor.run {
+                reauthing = false
+                reauthError = error.localizedDescription
+            }
         }
+    }
+
+    /// 退出注销流程：清空所有相关状态。
+    private func resetDeleteFlow() {
+        showDeletePassword = false
+        showDeleteConfirm = false
+        deletePassword = ""
+        reauthError = nil
     }
 
     private func redeemActivationCode() async {
