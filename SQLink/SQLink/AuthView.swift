@@ -64,9 +64,11 @@ private struct LoginForm: View {
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
                 .textFieldStyle(.roundedBorder)
+                .frame(height: 44)
 
             HStack {
                 PasswordField(text: $password, placeholder: "密码", isSecure: $showPwd)
+                    .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
                         .foregroundColor(.secondary)
@@ -131,6 +133,7 @@ private struct RegisterForm: View {
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
                     .textFieldStyle(.roundedBorder)
+                    .frame(height: 44)
                 Button { sendCode() } label: {
                     Text(sending ? "发送中…" : (countdown > 0 ? "\(countdown)s 后重发" : (devCode != nil ? "已获取" : "获取验证码")))
                 }
@@ -143,9 +146,11 @@ private struct RegisterForm: View {
             TextField("验证码", text: $code)
                 .keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
+                .frame(height: 44)
 
             HStack {
                 PasswordField(text: $password, placeholder: "密码（至少 6 位）", isSecure: $showPwd)
+                    .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
                         .foregroundColor(.secondary)
@@ -153,6 +158,7 @@ private struct RegisterForm: View {
             }
             HStack {
                 PasswordField(text: $confirm, placeholder: "确认密码", isSecure: $showPwd)
+                    .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
                         .foregroundColor(.secondary)
@@ -242,6 +248,7 @@ private struct ForgotPasswordForm: View {
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
                     .textFieldStyle(.roundedBorder)
+                    .frame(height: 44)
                 Button { sendCode() } label: { Text(sending ? "发送中…" : (countdown > 0 ? "\(countdown)s 后重发" : (devCode != nil ? "已获取" : "获取验证码"))) }
                     .disabled(sending || email.isEmpty || countdown > 0)
             }
@@ -252,9 +259,11 @@ private struct ForgotPasswordForm: View {
             TextField("验证码", text: $code)
                 .keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
+                .frame(height: 44)
 
             HStack {
                 PasswordField(text: $password, placeholder: "新密码（至少 6 位）", isSecure: $showPwd)
+                    .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
                         .foregroundColor(.secondary)
@@ -262,6 +271,7 @@ private struct ForgotPasswordForm: View {
             }
             HStack {
                 PasswordField(text: $confirm, placeholder: "确认新密码", isSecure: $showPwd)
+                    .frame(height: 44)
                 Button { showPwd.toggle() } label: {
                     Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
                         .foregroundColor(.secondary)
