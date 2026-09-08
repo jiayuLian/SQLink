@@ -25,17 +25,12 @@ struct AuthTokenData: Decodable {
     let token: String?
     let email: String?
     let isPro: Bool?
-    let expiresAt: String?
     let code: String?
 }
 
+/// 激活码兑换返回：仅需会员判定结果（会员为本地永久判定，无到期时间 / 类型 / 过期等冗余字段）。
 struct MembershipData: Decodable {
-    let email: String?
-    let avatar: String?
     let isPro: Bool
-    let proType: String?
-    let expiresAt: String?
-    let remark: String?
 }
 
 struct AvatarData: Decodable {
@@ -98,20 +93,20 @@ final class AuthService {
         return nil
     }
 
-    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, isPro: Bool, expiresAt: String?) {
+    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, isPro: Bool) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/register", body: ["email": email, "code": code, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.isPro ?? false, d.expiresAt)
+        return (token, email, d.isPro ?? false)
     }
 
-    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, isPro: Bool, expiresAt: String?) {
+    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, isPro: Bool) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/login", body: ["email": email, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.isPro ?? false, d.expiresAt)
+        return (token, email, d.isPro ?? false)
     }
 
     func sendResetCode(baseURL: String, email: String) async throws -> String? {
