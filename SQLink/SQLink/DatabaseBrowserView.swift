@@ -1,30 +1,5 @@
 import SwiftUI
 
-// 内嵌搜索栏：避免 .searchable 在导航抽屉里产生大段空白
-struct InlineSearchBar: View {
-    @Binding var text: String
-    let placeholder: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundColor(.secondary)
-            TextField(placeholder, text: $text)
-                .textFieldStyle(.plain)
-            if !text.isEmpty {
-                Button { text = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color(.systemGray5))
-        .cornerRadius(10)
-    }
-}
-
 // MARK: - Database list
 struct DatabaseBrowserView: View {
     let profile: ConnectionProfile
@@ -56,19 +31,15 @@ struct DatabaseBrowserView: View {
                 if let db = selectedDB {
                     TableListView(profile: profile, db: db, connection: conn, onSwitchDB: { selectedDB = nil })
                 } else {
-                    VStack(spacing: 0) {
-                        InlineSearchBar(text: $search, placeholder: "搜索数据库")
-                            .padding(.horizontal)
-                            .padding(.top, 8)
-                        List {
-                            ForEach(filtered, id: \.self) { db in
-                                NavigationLink(db, destination: TableListView(profile: profile, db: db, connection: conn))
-                            }
+                    List {
+                        ForEach(filtered, id: \.self) { db in
+                            NavigationLink(db, destination: TableListView(profile: profile, db: db, connection: conn))
                         }
-                        .listStyle(.insetGrouped)
-                        .navigationTitle(profile.name)
-                        .navigationBarTitleDisplayMode(.inline)
                     }
+                    .listStyle(.insetGrouped)
+                    .navigationTitle(profile.name)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .searchable(text: $search, prompt: "搜索数据库")
                 }
             }
         }
@@ -119,26 +90,22 @@ struct TableListView: View {
             } else if let error = error {
                 Text(error).foregroundColor(.red).padding()
             } else {
-                VStack(spacing: 0) {
-                    InlineSearchBar(text: $search, placeholder: "搜索表")
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                    List {
-                        ForEach(0..<filtered.count, id: \.self) { i in
-                            let t = filtered[i]
-                            NavigationLink(destination: TableDetailView(connection: connection, db: db, table: t.name)) {
-                                Label(t.name, systemImage: t.type == "VIEW" ? "eye" : "table")
-                            }
+                List {
+                    ForEach(0..<filtered.count, id: \.self) { i in
+                        let t = filtered[i]
+                        NavigationLink(destination: TableDetailView(connection: connection, db: db, table: t.name)) {
+                            Label(t.name, systemImage: t.type == "VIEW" ? "eye" : "table")
                         }
                     }
-                    .listStyle(.insetGrouped)
-                    .navigationTitle(db)
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            if let onSwitchDB = onSwitchDB {
-                                Button("切换库") { onSwitchDB() }
-                            }
+                }
+                .listStyle(.insetGrouped)
+                .navigationTitle(db)
+                .navigationBarTitleDisplayMode(.inline)
+                .searchable(text: $search, prompt: "搜索表")
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        if let onSwitchDB = onSwitchDB {
+                            Button("切换库") { onSwitchDB() }
                         }
                     }
                 }
