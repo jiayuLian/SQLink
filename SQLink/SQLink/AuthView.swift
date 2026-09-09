@@ -79,7 +79,7 @@ private struct LoginForm: View {
                 PasswordField(text: $password, placeholder: "密码", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
-                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                    Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
                         .foregroundColor(.secondary)
                 }
             }
@@ -160,7 +160,7 @@ private struct RegisterForm: View {
                 PasswordField(text: $password, placeholder: "密码（至少 6 位）", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
-                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                    Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
                         .foregroundColor(.secondary)
                 }
             }
@@ -168,7 +168,7 @@ private struct RegisterForm: View {
                 PasswordField(text: $confirm, placeholder: "确认密码", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
-                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                    Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
                         .foregroundColor(.secondary)
                 }
             }
@@ -273,7 +273,7 @@ private struct ForgotPasswordForm: View {
                 PasswordField(text: $password, placeholder: "新密码（至少 6 位）", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
-                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                    Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
                         .foregroundColor(.secondary)
                 }
             }
@@ -281,7 +281,7 @@ private struct ForgotPasswordForm: View {
                 PasswordField(text: $confirm, placeholder: "确认新密码", showPassword: $showPwd)
                     .frame(height: 44)
                 Button { showPwd.toggle() } label: {
-                    Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                    Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
                         .foregroundColor(.secondary)
                 }
             }

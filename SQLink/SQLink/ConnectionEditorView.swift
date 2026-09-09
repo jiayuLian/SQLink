@@ -45,7 +45,7 @@ struct ConnectionEditorView: View {
                     HStack {
                         PasswordField(text: $password, placeholder: "密码", showPassword: $showPwd)
                         Button { showPwd.toggle() } label: {
-                            Image(systemName: showPwd ? "eye.slash.fill" : "eye.fill")
+                            Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
                                 .foregroundColor(.secondary)
                         }
                     }
