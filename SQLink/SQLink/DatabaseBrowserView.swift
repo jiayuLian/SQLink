@@ -41,7 +41,7 @@ struct DatabaseBrowserView: View {
                     .listStyle(.insetGrouped)
                     .navigationTitle(profile.name)
                     .navigationBarTitleDisplayMode(.inline)
-                    .searchable(text: $search, prompt: "搜索数据库", placement: .navigationBarDrawer(displayMode: .always))
+                    .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索数据库")
                 }
             }
         }
@@ -105,7 +105,7 @@ struct TableListView: View {
                 .listStyle(.insetGrouped)
                 .navigationTitle(db)
                 .navigationBarTitleDisplayMode(.inline)
-                .searchable(text: $search, prompt: "搜索表", placement: .navigationBarDrawer(displayMode: .always))
+                .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索表")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         if let onSwitchDB = onSwitchDB {
