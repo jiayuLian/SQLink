@@ -75,8 +75,9 @@ struct QueryConsoleView: View {
         return sql
     }
 
-    /// Suggestions = keywords + table names + current-table columns, all filtered
-    /// by the prefix of the current word (case-insensitive).
+    /// Suggestions = keywords + table names + current-table columns。
+    /// 过滤规则见 matchesSuggestion：前缀优先，段感知（含子串）兜底。
+    /// 例：输入 lvv_c / lvv_r 都能匹配 lvv_exchange_record；输入 config 也能匹配 lvv_user_config。
     /// 当「当前词」为空（刚输完一个词、位于词边界）时，展示默认候选列表。
     private var suggestions: [String] {
         let w = currentWord.uppercased()
@@ -92,12 +93,37 @@ struct QueryConsoleView: View {
         var out: [String] = []
         for item in pool {
             let u = item.uppercased()
-            if w.isEmpty || u.hasPrefix(w), !seen.contains(u) {
+            if w.isEmpty || matchesSuggestion(item, w), !seen.contains(u) {
                 seen.insert(u)
                 out.append(item)
             }
         }
         return Array(out.prefix(10))
+    }
+
+    /// 候选词 `item` 是否匹配用户输入的「当前词」`typed`（不区分大小写）。
+    /// 1. 前缀匹配：item 以 typed 开头（最精确，保留原有行为）。
+    /// 2. 段感知匹配：按 `_` 拆分后，已输入的前导段需逐段前缀对齐，
+    ///    最后一个输入段只需是后续任意段的「前缀或子串」。
+    ///    例：lvv_c / lvv_r 均能匹配 lvv_exchange_record；输入 config 也能匹配 lvv_user_config。
+    private func matchesSuggestion(_ item: String, _ typed: String) -> Bool {
+        let t = typed.uppercased()
+        guard !t.isEmpty else { return true }
+        let i = item.uppercased()
+        // 1) 前缀匹配（最精确）
+        if i.hasPrefix(t) { return true }
+        // 2) 段感知兜底：typed 至少 2 字符，避免单字符过度扩散
+        guard t.count >= 2 else { return false }
+        let tp = t.split(separator: "_").map(String.init)
+        let ip = i.split(separator: "_").map(String.init)
+        guard !tp.isEmpty, !ip.isEmpty else { return false }
+        // 前导段（除最后一段）必须逐段前缀对齐
+        for k in 0..<(tp.count - 1) {
+            guard k < ip.count, ip[k].hasPrefix(tp[k]) else { return false }
+        }
+        // 最后一段：在 item 的剩余段中，任一段前缀或包含它即可
+        let last = tp.last!
+        return ip[(tp.count - 1)...].contains { $0.hasPrefix(last) || $0.contains(last) }
     }
 
     /// 自动补全用的「当前上下文表」：手动选择优先，否则用从 SQL 解析出的表。
