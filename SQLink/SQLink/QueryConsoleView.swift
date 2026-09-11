@@ -22,7 +22,8 @@ struct QueryConsoleView: View {
 
     // context for autocomplete
     @State private var tables: [String] = []
-    @State private var contextTable: String = ""
+    @State private var contextTable: String = ""   // 手动从「上下文表」选择的表
+    @State private var detectedTable: String = ""   // 从 SQL 文本自动解析出的表
     @State private var contextColumns: [ColumnInfo] = []
 
     // query history
@@ -55,11 +56,14 @@ struct QueryConsoleView: View {
 
     // autocomplete
     private let keywords = [
-        "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE",
-        "CREATE", "DROP", "ALTER", "TABLE", "DATABASE", "LIMIT", "ORDER", "GROUP", "BY",
-        "AND", "OR", "NOT", "NULL", "LIKE", "IN", "BETWEEN", "JOIN", "LEFT", "RIGHT",
-        "INNER", "OUTER", "ON", "AS", "ASC", "DESC", "HAVING", "UNION", "DISTINCT",
-        "COUNT", "SUM", "AVG", "MAX", "MIN"
+        "SELECT", "SELECT *", "SELECT DISTINCT", "FROM", "WHERE", "AND", "OR", "NOT",
+        "ORDER BY", "GROUP BY", "HAVING", "LIMIT", "OFFSET",
+        "INSERT INTO", "VALUES", "UPDATE", "SET", "DELETE FROM",
+        "CREATE TABLE", "DROP TABLE", "ALTER TABLE", "TRUNCATE TABLE",
+        "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN", "ON",
+        "AS", "ASC", "DESC", "LIKE", "IN", "NOT IN", "BETWEEN", "IS NULL", "IS NOT NULL",
+        "NULL", "COUNT(*)", "COUNT", "SUM", "AVG", "MAX", "MIN",
+        "NOW()", "CASE WHEN", "EXISTS", "UNION ALL", "UNION"
     ]
 
     /// The word currently being typed (text after the last whitespace boundary).
@@ -80,7 +84,7 @@ struct QueryConsoleView: View {
         var pool: [String] = []
         pool.append(contentsOf: keywords)
         pool.append(contentsOf: tables)
-        if !contextTable.isEmpty {
+        if !activeContextTable.isEmpty {
             pool.append(contentsOf: contextColumns.map { $0.field })
         }
         var seen = Set<String>()
@@ -93,6 +97,32 @@ struct QueryConsoleView: View {
             }
         }
         return Array(out.prefix(10))
+    }
+
+    /// 自动补全用的「当前上下文表」：手动选择优先，否则用从 SQL 解析出的表。
+    private var activeContextTable: String {
+        contextTable.isEmpty ? detectedTable : contextTable
+    }
+
+    /// 从 SQL 文本解析出最近一次出现的表名（FROM / JOIN / UPDATE / INTO 之后）。
+    private static func parseTable(from sql: String) -> String {
+        let pattern = #"(?i)\b(?:from|join|update|into)\s+`?([a-zA-Z0-9_]+)`?(?:\.`?([a-zA-Z0-9_]+)`?)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return "" }
+        let ns = sql as NSString
+        let matches = regex.matches(in: sql, range: NSRange(location: 0, length: ns.length))
+        guard let last = matches.last else { return "" }
+        let g1 = last.range(at: 1).location != NSNotFound ? ns.substring(with: last.range(at: 1)) : ""
+        let g2 = last.range(at: 2).location != NSNotFound ? ns.substring(with: last.range(at: 2)) : ""
+        return g2.isEmpty ? g1 : g2
+    }
+
+    /// 根据当前输入的 SQL 重新解析上下文表，并在变化时自动加载其字段用于补全。
+    @MainActor private func detectTableFromSQL() {
+        let t = Self.parseTable(from: sql)
+        if t != detectedTable {
+            detectedTable = t
+            Task { await loadContextColumnsAsync() }
+        }
     }
 
     var body: some View {
@@ -251,10 +281,11 @@ struct QueryConsoleView: View {
                 await loadTables(db: db)
                 if let dt = defaultTable, tables.contains(dt) {
                     contextTable = dt
-                    await loadContextColumnsAsync()
                 }
+                await MainActor.run { detectTableFromSQL() }
             }
         }
+        .onChange(of: sql) { _ in detectTableFromSQL() }
         .alert("提示", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) {
             Button("确定") { editError = nil }
         } message: { Text(editError ?? "") }
@@ -313,12 +344,13 @@ struct QueryConsoleView: View {
     }
 
     private func loadContextColumnsAsync() async {
-        guard let db = db, !contextTable.isEmpty else {
+        let ct = activeContextTable
+        guard let db = db, !ct.isEmpty else {
             await MainActor.run { self.contextColumns = [] }
             return
         }
         do {
-            let cols = try await connection.listColumns(db: db, table: contextTable)
+            let cols = try await connection.listColumns(db: db, table: ct)
             await MainActor.run { self.contextColumns = cols }
         } catch {
             await MainActor.run { self.contextColumns = [] }
