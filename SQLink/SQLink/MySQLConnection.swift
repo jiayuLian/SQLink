@@ -73,14 +73,16 @@ final class MySQLConnection {
             let r = try self._query("SHOW FULL COLUMNS FROM `\(self.esc(db))`.`\(self.esc(table))`")
             guard case .result(_, let rows) = r else { return [] }
             return rows.map { row in
-                ColumnInfo(
-                    field: row[0] ?? "",
-                    type: row[1] ?? "",
-                    null: row[3] ?? "",
-                    key: row[4] ?? "",
-                    default: row[5] ?? "",
-                    extra: row[6] ?? "",
-                    comment: row[8] ?? ""
+                // 用安全取值，避免个别 MySQL/MariaDB 版本列数偏少时数组越界崩溃。
+                func cell(_ i: Int) -> String { (i < row.count ? row[i] : nil) ?? "" }
+                return ColumnInfo(
+                    field: cell(0),
+                    type: cell(1),
+                    null: cell(3),
+                    key: cell(4),
+                    default: cell(5),
+                    extra: cell(6),
+                    comment: cell(8)
                 )
             }
         }
@@ -255,7 +257,9 @@ final class MySQLConnection {
             let (name, _) = readCString(g, i)
             if !name.isEmpty { pluginName = name }
         }
-        while scramble.last == 0 { scramble.removeLast() }
+        // auth-plugin-data 标准长度为 20 字节（8 + 12），part2 末尾常带一个 0x00。
+        // 不能循环剥掉所有尾部零字节（会误删合法数据，约 1/256 概率导致认证失败），统一截到 20 字节。
+        if scramble.count > 20 { scramble = Array(scramble.prefix(20)) }
         return (scramble, pluginName, serverCap)
     }
 
@@ -454,10 +458,13 @@ final class MySQLConnection {
         }
         let _ = try readPacket() // EOF after columns
         var rows = [[String?]]()
-        while rows.count < maxRows {
+        while true {
             let rowPkt = try readPacket()
             if rowPkt.isEmpty { break }
             if rowPkt[0] == 0xFE, rowPkt.count < 9 { break } // EOF terminator
+            // 达到单次查询行数上限后，仍必须把剩余行包读完（丢弃不解析）。
+            // 否则残留字节会留在 socket 里，被下一条查询当成响应解析 → 协议错位、数据错乱。
+            if rows.count >= maxRows { continue }
             var vals = [String?]()
             var i = 0
             for _ in 0..<colCount {

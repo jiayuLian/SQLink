@@ -93,8 +93,7 @@ struct FeedbackView: View {
     private func submit() async {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        submitting = true
-        defer { submitting = false }
+        await MainActor.run { submitting = true }
         do {
             try await AuthService.shared.submitFeedback(
                 baseURL: settings.apiBaseURL,
@@ -106,9 +105,11 @@ struct FeedbackView: View {
                 submitted = true
                 content = ""
                 contact = ""
+                submitting = false
             }
         } catch {
             await MainActor.run {
+                submitting = false
                 alertMsg = (error as? AuthError)?.errorDescription ?? error.localizedDescription
                 showAlert = true
             }

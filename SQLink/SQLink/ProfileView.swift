@@ -24,11 +24,9 @@ struct ProfileView: View {
     // 注销二次密码验证
     @State private var showDeletePassword = false
     @State private var deletePassword = ""
+    @State private var showDeletePwd = false
     @State private var reauthing = false
     @State private var reauthError: String?
-
-    private let authorWeChat = "cute6697"
-    private let authorEmail = "lianjiayu998@163.com"
 
     var body: some View {
         NavigationView {
@@ -58,22 +56,29 @@ struct ProfileView: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        if settings.isLoggedIn { showAccountMenu = true }
-                        else { showLogin = true }
+                        // 游客态（isLoggedIn 为 true 但没有 token）不进入账号菜单：
+                        // 更换头像 / 注销等请求会带空 token → 401 → 连游客态一起被清掉。
+                        if settings.authToken.isEmpty { showLogin = true }
+                        else { showAccountMenu = true }
                     }
 
                     if settings.isLoggedIn {
                         if let err = avatarError {
                             Text(err).font(.caption).foregroundColor(.red)
                         }
-                        // 会员区：非会员可激活码开通，会员显示永久会员标识（状态为本地判定，无需刷新）
+                        // 会员区：会员显示永久会员标识（状态为本地判定，无需刷新）。
+                        // 激活码与账号绑定，必须真实登录后才能使用；游客态只提示先登录。
                         if settings.isPro {
                             Label("永久会员", systemImage: "checkmark.seal.fill")
                                 .foregroundColor(.accentColor)
-                        } else {
+                        } else if !settings.authToken.isEmpty {
                             Button { showActivate = true } label: {
                                 Label("激活码开通会员", systemImage: "key.fill")
                             }
+                        } else {
+                            Text("激活码与账号绑定，请先登录后使用")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     } else {
                         Button { showLogin = true } label: {
@@ -133,11 +138,14 @@ struct ProfileView: View {
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
-                        TextField("登录密码", text: $deletePassword)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(height: 44)
-                            .autocapitalization(.none)
-                            .disableAutocorrection(true)
+                        HStack {
+                            PasswordField(text: $deletePassword, placeholder: "登录密码", showPassword: $showDeletePwd)
+                                .frame(height: 44)
+                            Button { showDeletePwd.toggle() } label: {
+                                Image(systemName: showDeletePwd ? "eye.fill" : "eye.slash.fill")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                         if let e = reauthError {
                             Text(e).foregroundColor(.red).font(.caption)
                         }
@@ -225,7 +233,9 @@ struct ProfileView: View {
     }
 
     private var displayName: String {
-        settings.authEmail.isEmpty ? "未登录" : settings.authEmail
+        // 游客态显示「游客模式」，与「未登录」（无任何登录态）区分开
+        if settings.guestMode { return "游客模式" }
+        return settings.authEmail.isEmpty ? "未登录" : settings.authEmail
     }
 
     /// 注销确认弹窗文案：若当前为会员，明确提示将失去会员权益且不予退还。
@@ -271,7 +281,12 @@ struct ProfileView: View {
     }
 
     private func redeemActivationCode() async {
-        activating = true; activationError = nil
+        // 激活码绑定账号：未真实登录（游客态）不允许激活，避免带空 token 请求触发 401 强制登出
+        guard !settings.authToken.isEmpty else {
+            await MainActor.run { activationError = "请先登录账号后再使用激活码" }
+            return
+        }
+        await MainActor.run { activating = true; activationError = nil }
         let code = activationCode.trimmingCharacters(in: .whitespaces)
         do {
             let data = try await AuthService.shared.redeemActivation(baseURL: settings.apiBaseURL, token: settings.authToken, code: code)

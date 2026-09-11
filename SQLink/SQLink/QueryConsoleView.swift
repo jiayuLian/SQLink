@@ -517,25 +517,95 @@ struct QueryConsoleView: View {
         sql = "SELECT * FROM `\(table)` "
     }
 
+    /// 按分号切分多条语句，但忽略字符串字面量、反引号标识符与注释中的分号。
+    /// 例：`SELECT * FROM t WHERE a='x;y'` 不会被误切成两条语句。
+    private func splitStatements(_ text: String) -> [String] {
+        var out: [String] = []
+        var current = ""
+        var inSingle = false, inDouble = false, inBacktick = false
+        var inLineComment = false, inBlockComment = false
+        let chars = Array(text)
+        var i = 0
+        func flush() {
+            let t = current.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { out.append(t) }
+            current = ""
+        }
+        while i < chars.count {
+            let c = chars[i]
+            let next: Character? = i + 1 < chars.count ? chars[i + 1] : nil
+            if inLineComment {
+                current.append(c)
+                if c == "\n" { inLineComment = false }
+                i += 1; continue
+            }
+            if inBlockComment {
+                current.append(c)
+                if c == "*", next == "/" { current.append("/"); inBlockComment = false; i += 2; continue }
+                i += 1; continue
+            }
+            if inSingle {
+                current.append(c)
+                if c == "\\", let n = next { current.append(n); i += 2; continue }
+                if c == "'" {
+                    if next == "'" { current.append("'"); i += 2; continue }
+                    inSingle = false
+                }
+                i += 1; continue
+            }
+            if inDouble {
+                current.append(c)
+                if c == "\\", let n = next { current.append(n); i += 2; continue }
+                if c == "\"" {
+                    if next == "\"" { current.append("\""); i += 2; continue }
+                    inDouble = false
+                }
+                i += 1; continue
+            }
+            if inBacktick {
+                current.append(c)
+                if c == "`" {
+                    if next == "`" { current.append("`"); i += 2; continue }
+                    inBacktick = false
+                }
+                i += 1; continue
+            }
+            // 普通状态：识别注释 / 引号起始
+            if c == "-", next == "-", i + 2 < chars.count, chars[i + 2].isWhitespace {
+                current.append("--"); current.append(chars[i + 2]); inLineComment = true; i += 3; continue
+            }
+            if c == "#" { current.append(c); inLineComment = true; i += 1; continue }
+            if c == "/", next == "*" { current.append("/*"); inBlockComment = true; i += 2; continue }
+            if c == "'" { current.append(c); inSingle = true; i += 1; continue }
+            if c == "\"" { current.append(c); inDouble = true; i += 1; continue }
+            if c == "`" { current.append(c); inBacktick = true; i += 1; continue }
+            if c == ";" { flush(); i += 1; continue }
+            current.append(c); i += 1
+        }
+        flush()
+        return out
+    }
+
     func run() async {
-        hideKeyboard()
-        running = true
-        let stmts = sql.split(separator: ";")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        // 收起键盘与状态写入都必须回到主线程（nonisolated async 函数默认在后台执行器运行）
+        await MainActor.run {
+            hideKeyboard()
+            running = true
+        }
+        let stmts = splitStatements(sql)
         guard !stmts.isEmpty else {
             await MainActor.run { message = "请输入 SQL"; running = false }
             return
         }
         QueryHistory.add(sql)
         // 单条 SELECT 才尝试判定「可编辑」
-        let single = stmts.count == 1 ? String(stmts[0]) : nil
+        let single = stmts.count == 1 ? stmts[0] : nil
         do {
             var lastCols: [ColumnDef] = []
             var lastRows: [[String?]] = []
             var okCount = 0
             for s in stmts {
-                let r = try await connection.query(String(s))
+                let r = try await connection.query(s)
                 switch r {
                 case .ok: okCount += 1; lastCols = []; lastRows = []
                 case .result(let c, let rw): lastCols = c; lastRows = rw
@@ -586,12 +656,18 @@ struct QueryConsoleView: View {
             await MainActor.run { editError = "未检测到主键或唯一键" }
             return
         }
+        var failed = 0
         do {
             for ri in 0..<editingRows.count {
+                guard ri < rows.count else { continue }
+                let oldRow = rows[ri]
+                let newRow = editingRows[ri]
+                // 主键为 NULL 时无法定位行：跳过并计入失败，避免拼出 WHERE pk = '' 的「假成功」
+                guard pkIndex < oldRow.count, let pkRaw = oldRow[pkIndex] else { failed += 1; continue }
                 var sets: [String] = []
                 for ci in 0..<editColumns.count {
-                    let old = rows[ri][ci]
-                    let new = editingRows[ri][ci]
+                    let old = ci < oldRow.count ? oldRow[ci] : nil
+                    let new = ci < newRow.count ? newRow[ci] : nil
                     if old != new {
                         let col = "`\(editColumns[ci].field.replacingOccurrences(of: "`", with: "``"))`"
                         if let v = new {
@@ -602,12 +678,14 @@ struct QueryConsoleView: View {
                     }
                 }
                 guard !sets.isEmpty else { continue }
-                let pkVal = quoteVal(rows[ri][pkIndex] ?? "")
+                let pkVal = quoteVal(pkRaw)
                 let sqlUpd = "UPDATE `\(editDB.replacingOccurrences(of: "`", with: "``"))`.`\(editTable.replacingOccurrences(of: "`", with: "``"))` SET \(sets.joined(separator: ", ")) WHERE `\(pk.replacingOccurrences(of: "`", with: "``"))` = \(pkVal) LIMIT 1"
-                _ = try await connection.query(sqlUpd)
+                let r = try await connection.query(sqlUpd)
+                // 影响行数为 0 表示没有匹配到任何记录，不能报「保存成功」
+                if case .ok(let n) = r, n == 0 { failed += 1 }
             }
             await MainActor.run {
-                editMessage = "保存成功"
+                editMessage = failed == 0 ? "保存成功" : "保存完成（\(failed) 行未匹配到记录，未生效）"
                 editError = nil
                 editMode = false
                 rows = editingRows

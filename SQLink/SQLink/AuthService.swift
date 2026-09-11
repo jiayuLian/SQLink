@@ -44,14 +44,18 @@ final class AuthService {
     static let shared = AuthService()
     private init() {}
 
-    private func url(base: String, path: String) -> URL {
+    private func url(base: String, path: String) -> URL? {
         var s = base
         if s.hasSuffix("/") { s.removeLast() }
-        return URL(string: "\(s)\(path)")!
+        // 接口地址可能被改成非法值，这里安全返回 nil，避免强解包崩溃
+        return URL(string: "\(s)\(path)")
     }
 
     private func request<T: Decodable>(baseURL: String, path: String, token: String? = nil, body: [String: Any]? = nil) async throws -> APIResponse<T> {
-        var req = URLRequest(url: url(base: baseURL, path: path))
+        guard let apiURL = url(base: baseURL, path: path) else {
+            throw AuthError.message("接口地址无效，请检查服务端地址配置")
+        }
+        var req = URLRequest(url: apiURL)
         req.httpMethod = body == nil ? "GET" : "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = token, !token.isEmpty {

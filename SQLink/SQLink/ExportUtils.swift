@@ -46,11 +46,8 @@ struct ExportUtils {
         var statements: [String] = []
         for row in rows {
             let vals = columnNames.indices.map { i -> String in
-                let v = i < row.count ? row[i] : nil
-                if let s = v, !s.isEmpty {
-                    return "'" + s.replacingOccurrences(of: "'", with: "''") + "'"
-                }
-                return "NULL"
+                // NULL 与空字符串必须区分：NULL 写 NULL，空串写 ''，否则导出再导入会改变数据语义
+                return sqlValue(i < row.count ? row[i] : nil)
             }
             statements.append("INSERT INTO `\(safeTable)` (\(cols)) VALUES (\(vals.joined(separator: ", ")));")
         }
@@ -72,8 +69,9 @@ struct ExportUtils {
     }
 
     private static func sqlValue(_ v: String?) -> String {
-        if let s = v, !s.isEmpty { return "'" + s.replacingOccurrences(of: "'", with: "''") + "'" }
-        return "NULL"
+        // 仅 nil 视为 NULL；空字符串要写成 ''，与 CSV 路径保持一致
+        guard let s = v else { return "NULL" }
+        return "'" + s.replacingOccurrences(of: "'", with: "''") + "'"
     }
 
     /// 流式导出整张表（按筛选/排序）。

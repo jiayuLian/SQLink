@@ -13,7 +13,7 @@ struct ConnectionsView: View {
                 }
                 ForEach(store.profiles) { p in
                     NavigationLink(destination: DatabaseBrowserView(profile: p)) {
-                        ConnectionRow(profile: p, onEdit: { editorTarget = p })
+                        ConnectionRow(profile: p)
                     }
                     .swipeActions(edge: .trailing) {
                         Button { editorTarget = p } label: { Label("编辑", systemImage: "pencil") }

@@ -44,7 +44,11 @@ struct AuthView: View {
 
                 Spacer()
 
-                Button { settings.enterGuestMode() } label: {
+                Button {
+                    settings.enterGuestMode()
+                    // 进入游客模式后必须关闭登录弹窗，否则界面停在登录页、要手动下滑才能退出
+                    finish()
+                } label: {
                     Text("游客模式（功能受限）")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -132,6 +136,8 @@ private struct RegisterForm: View {
     @State private var devCode: String?
     @State private var showCodeAlert = false
     @State private var countdown = 0
+    /// 倒计时定时器：放进 @State 里，避免每次渲染都新建一个 Timer 发布者。
+    @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 16) {
@@ -147,7 +153,7 @@ private struct RegisterForm: View {
                 }
                 .disabled(sending || email.isEmpty || countdown > 0)
             }
-            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            .onReceive(ticker) { _ in
                 if countdown > 0 { countdown -= 1 }
             }
 
@@ -247,6 +253,8 @@ private struct ForgotPasswordForm: View {
     @State private var showCodeAlert = false
     @State private var showDone = false
     @State private var countdown = 0
+    /// 倒计时定时器：放进 @State 里，避免每次渲染都新建一个 Timer 发布者。
+    @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 16) {
@@ -260,7 +268,7 @@ private struct ForgotPasswordForm: View {
                 Button { sendCode() } label: { Text(sending ? "发送中…" : (countdown > 0 ? "\(countdown)s 后重发" : (devCode != nil ? "已获取" : "获取验证码"))) }
                     .disabled(sending || email.isEmpty || countdown > 0)
             }
-            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            .onReceive(ticker) { _ in
                 if countdown > 0 { countdown -= 1 }
             }
 

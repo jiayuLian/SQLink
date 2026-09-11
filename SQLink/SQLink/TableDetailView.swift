@@ -380,7 +380,7 @@ struct TableDetailView: View {
     }
 
     private func load() async {
-        loading = true; error = nil
+        await MainActor.run { loading = true; error = nil }
         do {
             async let cols = connection.listColumns(db: db, table: table)
             async let cnt = connection.countRows(db: db, table: table, whereClause: activeWhere)
@@ -754,17 +754,22 @@ struct TableDataView: View {
                     Divider()
                     HStack(spacing: 12) {
                         Button { if page > 1 { page -= 1 } } label: { Label("上一页", systemImage: "chevron.left") }
-                            .disabled(page <= 1 || loading)
+                            .disabled(page <= 1 || loading || editMode)
                         Text("\(page) / \(maxPage)").font(.caption)
                         Button { if page < maxPage { page += 1 } } label: { Label("下一页", systemImage: "chevron.right") }
-                            .disabled(page >= maxPage || loading)
+                            .disabled(page >= maxPage || loading || editMode)
                         Spacer()
+                        if editMode {
+                            // 编辑期间必须锁定翻页/改每页条数/改筛选，否则新页数据会与旧编辑值错位写库。
+                            Text("编辑中已锁定翻页").font(.caption2).foregroundColor(.orange)
+                        }
                         Menu { ForEach([50, 100, 200, 500], id: \.self) { s in
                             Button("\(s) 条/页") { settings.pageSize = s; page = 1 }
                         } } label: {
                             Label("\(settings.pageSize) 条/页", systemImage: "line.3.horizontal")
                                 .font(.caption)
                         }
+                        .disabled(editMode)
                         if gridScale != 1 {
                             Button { gridScale = 1 } label: {
                                 Label("\(Int(gridScale * 100))%", systemImage: "arrow.counterclockwise")
@@ -841,6 +846,7 @@ struct TableDataView: View {
             Button { showFilter = true } label: {
                 Label("筛选&排序", systemImage: "line.3.horizontal.decrease.circle")
             }
+            .disabled(editMode)
         }
         ToolbarItem(placement: .navigationBarTrailing) {
             if editMode {
@@ -873,7 +879,13 @@ struct TableDataView: View {
     }
 
     private func load() async {
-        loading = true; error = nil
+        // 数据即将整体替换：若正处于编辑态先退出编辑（翻页/筛选入口已锁定，此处为兜底），
+        // 避免「旧编辑值 × 新页主键」错位写库；同时保证状态写入在主线程。
+        await MainActor.run {
+            if editMode { cancelEdit() }
+            loading = true
+            error = nil
+        }
         do {
             try await fetchData()
         } catch {
@@ -942,6 +954,13 @@ struct TableDataView: View {
     }
 
     private func enterEdit() {
+        // 结果集列数必须与表结构列数一致（INVISIBLE 列、列级 SELECT 权限等都会导致不一致），
+        // 否则保存时会按结构列索引去读结果行 → 越界或写错列。
+        guard previewCols.count == columns.count, !previewRows.isEmpty else {
+            saveMessage = nil
+            saveError = "当前结果与表结构列数不一致，暂不支持编辑"
+            return
+        }
         editingValues = previewRows.map { $0.map { $0 } }
         hasChanges = false
         saveMessage = nil; saveError = nil
@@ -965,11 +984,17 @@ struct TableDataView: View {
             return
         }
         do {
+            var failed = 0
             for ri in 0..<editingValues.count {
+                guard ri < previewRows.count else { continue }
+                let oldRow = previewRows[ri]
+                let newRow = editingValues[ri]
+                // 主键为 NULL 时无法定位行：跳过并计入失败，避免拼出 WHERE pk = '' 的「假成功」
+                guard pkIndex < oldRow.count, let pkRaw = oldRow[pkIndex] else { failed += 1; continue }
                 var sets: [String] = []
                 for ci in 0..<columns.count {
-                    let old = previewRows[ri][ci]
-                    let new = editingValues[ri][ci]
+                    let old = ci < oldRow.count ? oldRow[ci] : nil
+                    let new = ci < newRow.count ? newRow[ci] : nil
                     if old != new {
                         let col = "`\(columns[ci].field.replacingOccurrences(of: "`", with: "``"))`"
                         if let v = new {
@@ -980,12 +1005,14 @@ struct TableDataView: View {
                     }
                 }
                 guard !sets.isEmpty else { continue }
-                let pkVal = quoteValue(previewRows[ri][pkIndex] ?? "")
+                let pkVal = quoteValue(pkRaw)
                 let sql = "UPDATE `\(db.replacingOccurrences(of: "`", with: "``"))`.`\(table.replacingOccurrences(of: "`", with: "``"))` SET \(sets.joined(separator: ", ")) WHERE `\(pk.replacingOccurrences(of: "`", with: "``"))` = \(pkVal) LIMIT 1"
-                _ = try await withReconnect { try await connection.query(sql) }
+                let r = try await withReconnect { try await connection.query(sql) }
+                // 影响行数为 0 表示没匹配到任何记录（例如主键值含空白、并发被改动），不能报「保存成功」
+                if case .ok(let n) = r, n == 0 { failed += 1 }
             }
             await MainActor.run {
-                saveMessage = "保存成功"
+                saveMessage = failed == 0 ? "保存成功" : "保存完成（\(failed) 行未匹配到记录，未生效）"
                 saveError = nil
                 editMode = false
             }

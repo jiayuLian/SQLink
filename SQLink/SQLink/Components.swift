@@ -7,9 +7,10 @@ extension Array {
 }
 
 /// Connection row shown in the main list.
+/// 编辑入口只保留侧滑 / 长按菜单：行内铅笔按钮嵌在 NavigationLink 里在 List 中几乎点不动，
+/// 属于无效控件，已移除（避免「点了没反应」的误判）。
 struct ConnectionRow: View {
     let profile: ConnectionProfile
-    var onEdit: (() -> Void)? = nil
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "server.rack")
@@ -28,13 +29,6 @@ struct ConnectionRow: View {
                 Image(systemName: "lock.fill")
                     .foregroundColor(.green)
                     .font(.caption)
-            }
-            if let onEdit = onEdit {
-                Button { onEdit() } label: {
-                    Image(systemName: "pencil")
-                        .foregroundColor(.accentColor)
-                }
-                .padding(.leading, 4)
             }
         }
         .padding(.vertical, 4)
@@ -103,7 +97,8 @@ struct ResultGridView: View {
         let row = rows[ri]
         return HStack(spacing: 0) {
             ForEach(0..<columns.count, id: \.self) { ci in
-                resultCell(ri: ri, ci: ci, value: row[ci])
+                // 用安全判断：结果行列数理论上与列定义一致，但列级权限/异常响应下可能偏少，避免越界崩溃
+                resultCell(ri: ri, ci: ci, value: ci < row.count ? row[ci] : nil)
             }
         }
     }
@@ -163,9 +158,15 @@ struct EditableGridView: View {
 
     private func binding(for ri: Int, _ ci: Int) -> Binding<String> {
         Binding(
-            get: { rows[ri][ci] ?? "" },
+            get: {
+                guard ri < rows.count, ci < rows[ri].count else { return "" }
+                return rows[ri][ci] ?? ""
+            },
             set: { new in
-                if new.isEmpty && originalRows[ri][ci] == nil {
+                guard ri < rows.count, ci < rows[ri].count else { return }
+                let wasNull = (ri < originalRows.count && ci < originalRows[ri].count)
+                    ? originalRows[ri][ci] == nil : false
+                if new.isEmpty && wasNull {
                     rows[ri][ci] = nil
                 } else {
                     rows[ri][ci] = new
@@ -232,7 +233,8 @@ struct EditableGridView: View {
 
     @ViewBuilder
     private func pkCell(ri: Int, ci: Int) -> some View {
-        let text = rows[ri][ci] == nil ? "NULL" : (rows[ri][ci] ?? "")
+        let cell: String? = ci < rows[ri].count ? rows[ri][ci] : nil
+        let text = cell ?? "NULL"
         Text(text)
             .font(.system(size: 12 * scale, design: .monospaced))
             .foregroundColor(.secondary)
@@ -246,10 +248,11 @@ struct EditableGridView: View {
     @ViewBuilder
     private func valueCell(ri: Int, ci: Int) -> some View {
         let background = (ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear
-        TextField(rows[ri][ci] == nil ? "NULL" : "",
+        let cell: String? = ci < rows[ri].count ? rows[ri][ci] : nil
+        TextField(cell == nil ? "NULL" : "",
                   text: binding(for: ri, ci))
             .font(.system(size: 12 * scale, design: .monospaced))
-            .foregroundColor(rows[ri][ci] == nil ? .secondary : .primary)
+            .foregroundColor(cell == nil ? .secondary : .primary)
             .lineLimit(1)
             .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
             .padding(6 * scale)
