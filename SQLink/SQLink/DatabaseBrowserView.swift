@@ -108,6 +108,11 @@ struct TableListView: View {
                             Button("切换库") { onSwitchDB() }
                         }
                     }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        NavigationLink("查询") {
+                            QueryConsoleView(connection: connection, db: db, defaultTable: nil)
+                        }
+                    }
                 }
             }
         }

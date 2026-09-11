@@ -66,21 +66,22 @@ struct QueryConsoleView: View {
         "NOW()", "CASE WHEN", "EXISTS", "UNION ALL", "UNION"
     ]
 
-    /// The word currently being typed (text after the last whitespace boundary).
+    /// 当前正在输入的「词」：最后一个空白符之后的子串。
+    /// 若 SQL 以空白结尾（刚输完一个词、位于词边界），返回空串，表示应在末尾追加。
     private var currentWord: String {
-        let trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-        if let r = trimmed.range(of: " ", options: .backwards) {
-            return String(trimmed[r.upperBound...])
+        if let r = sql.rangeOfCharacter(from: .whitespacesAndNewlines, options: .backwards) {
+            return String(sql[r.upperBound...])
         }
-        return trimmed
+        return sql
     }
 
     /// Suggestions = keywords + table names + current-table columns, all filtered
     /// by the prefix of the current word (case-insensitive).
+    /// 当「当前词」为空（刚输完一个词、位于词边界）时，展示默认候选列表。
     private var suggestions: [String] {
         let w = currentWord.uppercased()
-        guard !w.isEmpty else { return [] }
+        // 完全空白（尚未输入任何内容）时不打扰用户
+        if sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }
         var pool: [String] = []
         pool.append(contentsOf: keywords)
         pool.append(contentsOf: tables)
@@ -91,7 +92,7 @@ struct QueryConsoleView: View {
         var out: [String] = []
         for item in pool {
             let u = item.uppercased()
-            if u.hasPrefix(w) && !seen.contains(u) {
+            if w.isEmpty || u.hasPrefix(w), !seen.contains(u) {
                 seen.insert(u)
                 out.append(item)
             }
@@ -357,15 +358,16 @@ struct QueryConsoleView: View {
         }
     }
 
-    /// Replaces only the current word with the suggestion.
+    /// 将候选词填入编辑器：当前词为空（末尾/开头词边界）→ 末尾追加；否则替换当前词。
     private func applySuggestion(_ suggestion: String) {
-        let trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            sql = suggestion + " "
+        let cw = currentWord
+        if cw.isEmpty {
+            let needsSpace = !sql.isEmpty && !sql.hasSuffix(" ")
+            sql = sql + (needsSpace ? " " : "") + suggestion + " "
             return
         }
-        if let r = trimmed.range(of: " ", options: .backwards) {
-            let before = String(trimmed[..<r.lowerBound])
+        if let r = sql.rangeOfCharacter(from: .whitespacesAndNewlines, options: .backwards) {
+            let before = String(sql[..<r.lowerBound])
             sql = before + " " + suggestion + " "
         } else {
             sql = suggestion + " "
