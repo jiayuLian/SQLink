@@ -170,6 +170,7 @@ struct TableDetailView: View {
     @State private var ddlLoading = false
     @State private var ddlError: String?
     @State private var ddlScale: CGFloat = 1.0
+    @GestureState private var ddlMagnify: CGFloat = 1.0
 
     // filter & sort (lifted here so they persist across sheet / navigation)
     @State private var showFilter = false
@@ -279,8 +280,7 @@ struct TableDetailView: View {
                     } else {
                         ScrollView {
                             Text(ddlDisplay)
-                                .font(.system(.body, design: .monospaced))
-                                .scaleEffect(ddlScale)
+                                .font(.system(size: 13 * ddlScale * ddlMagnify, design: .monospaced))
                                 .textSelection(.enabled)
                                 .padding(12)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -290,7 +290,10 @@ struct TableDetailView: View {
                                 .contentShape(Rectangle())
                                 .gesture(
                                     MagnificationGesture()
-                                        .onChanged { v in ddlScale = min(max(v, 0.6), 4.0) }
+                                        .updating($ddlMagnify) { value, state, _ in state = value }
+                                        .onEnded { value in
+                                            ddlScale = min(max(ddlScale * value, 0.6), 3.0)
+                                        }
                                 )
                         }
                     }
