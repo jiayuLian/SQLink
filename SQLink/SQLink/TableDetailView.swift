@@ -389,7 +389,7 @@ struct TableDetailView: View {
     private func loadDDL() async {
         ddlLoading = true; ddlError = nil; ddlText = ""
         do {
-            let sql = try await withReconnect { try await connection.showCreateTable(db: db, table: table) }
+            let sql = try await withReconnect(connection) { try await connection.showCreateTable(db: db, table: table) }
             await MainActor.run {
                 self.ddlText = sql
                 self.ddlLoading = false
@@ -451,8 +451,8 @@ struct TableDetailView: View {
     private func load() async {
         await MainActor.run { loading = true; error = nil }
         do {
-            async let cols = withReconnect { try await connection.listColumns(db: db, table: table) }
-            async let cnt = withReconnect { try await connection.countRows(db: db, table: table, whereClause: activeWhere) }
+            async let cols = withReconnect(connection) { try await connection.listColumns(db: db, table: table) }
+            async let cnt = withReconnect(connection) { try await connection.countRows(db: db, table: table, whereClause: activeWhere) }
             let c = try await cols
             let n = try await cnt
             await MainActor.run {
@@ -937,16 +937,6 @@ struct TableDataView: View {
         }
     }
 
-    /// 连接断开（写入数据失败 / 被服务器关闭）时自动重连一次再重试，避免「点击查看数据却报写入失败」。
-    private func withReconnect<T>(_ body: () async throws -> T) async throws -> T {
-        do {
-            return try await body()
-        } catch let e as MySQLError where e.isDeadConnection {
-            try await connection.reconnect()
-            return try await body()
-        }
-    }
-
     private func load() async {
         // 数据即将整体替换：若正处于编辑态先退出编辑（翻页/筛选入口已锁定，此处为兜底），
         // 避免「旧编辑值 × 新页主键」错位写库；同时保证状态写入在主线程。
@@ -966,7 +956,7 @@ struct TableDataView: View {
     private func fetchData() async throws {
         let pageSize = max(1, settings.pageSize)
         // 先取真实总数，用于免费版浏览上限判断
-        let raw = try await withReconnect { try await connection.countRows(db: db, table: table, whereClause: activeWhere) }
+        let raw = try await withReconnect(connection) { try await connection.countRows(db: db, table: table, whereClause: activeWhere) }
         let viewLimit = settings.isPro ? Int.max : settings.plan.freeViewLimit
         let displayTotal = min(raw, viewLimit)
         let computedMaxPage = max(1, Int(ceil(Double(displayTotal) / Double(pageSize))))
@@ -974,9 +964,9 @@ struct TableDataView: View {
         if safePage != page { await MainActor.run { page = safePage } }
         let offset = (safePage - 1) * pageSize
 
-        async let cols = withReconnect { try await connection.listColumns(db: db, table: table) }
+        async let cols = withReconnect(connection) { try await connection.listColumns(db: db, table: table) }
         let c = try await cols
-        async let prev = withReconnect { try await connection.fetchRows(db: db, table: table, limit: pageSize, offset: offset,
+        async let prev = withReconnect(connection) { try await connection.fetchRows(db: db, table: table, limit: pageSize, offset: offset,
                                                  whereClause: activeWhere, orderBy: activeOrderBy) }
         let p = try await prev
         var pc = [ColumnDef](); var pr = [[String?]]()
@@ -1076,7 +1066,7 @@ struct TableDataView: View {
                 guard !sets.isEmpty else { continue }
                 let pkVal = quoteValue(pkRaw)
                 let sql = "UPDATE `\(db.replacingOccurrences(of: "`", with: "``"))`.`\(table.replacingOccurrences(of: "`", with: "``"))` SET \(sets.joined(separator: ", ")) WHERE `\(pk.replacingOccurrences(of: "`", with: "``"))` = \(pkVal) LIMIT 1"
-                let r = try await withReconnect { try await connection.query(sql) }
+                let r = try await withReconnect(connection) { try await connection.query(sql) }
                 // 影响行数为 0 表示没匹配到任何记录（例如主键值含空白、并发被改动），不能报「保存成功」
                 if case .ok(let n) = r, n == 0 { failed += 1 }
             }
@@ -1089,5 +1079,17 @@ struct TableDataView: View {
         } catch {
             await MainActor.run { saveError = "保存失败：\(error.localizedDescription)" }
         }
+    }
+}
+
+// MARK: - 死连接自动重连（文件级，供 TableDetailView / TableDataView 共用）
+
+/// 连接断开（写入数据失败 / 被服务器关闭）时自动重连一次再重试，避免「点击查看数据却报写入失败」。
+fileprivate func withReconnect<T>(_ connection: MySQLConnection, _ body: () async throws -> T) async throws -> T {
+    do {
+        return try await body()
+    } catch let e as MySQLError where e.isDeadConnection {
+        try await connection.reconnect()
+        return try await body()
     }
 }
