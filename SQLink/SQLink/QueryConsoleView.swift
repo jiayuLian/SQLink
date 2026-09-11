@@ -153,19 +153,30 @@ struct QueryConsoleView: View {
 
     // MARK: - 限定符解析（别名 / 表名 + 字段补全）
 
-    /// 从 FROM / JOIN 子句解析出 (表名, 别名?) 列表。
+    /// 从 FROM / JOIN 子句解析出 (表名, 别名?) 列表，支持多表关联查询：
+    /// 多个 JOIN（INNER/LEFT/RIGHT/... JOIN）、逗号 JOIN（FROM t1, t2）均能逐表解析别名。
     private var parsedFromTables: [(table: String, alias: String?)] {
-        let pattern = #"(?i)\b(?:from|join)\s+`?([a-zA-Z0-9_]+)`?(?:\.`?([a-zA-Z0-9_]+)`?)?(?:\s+(?:as\s+)?([a-zA-Z0-9_]+))?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
-        let ns = sql as NSString
-        let ms = regex.matches(in: sql, range: NSRange(location: 0, length: ns.length))
-        // 跟在表名后的关键词不应被当作别名
+        // 1) 取出 FROM 之后的子句区域（到首个顶层 WHERE/GROUP BY/ORDER BY/HAVING/LIMIT/UNION/SET/VALUES 之前）。
+        let regionPattern = #"(?is)\bfrom\b\s+(.*?)(?=\bwhere\b|\bgroup\s+by\b|\border\s+by\b|\bhaving\b|\blimit\b|\bunion\b|\bset\b|\bvalues\b|$)"#
+        guard let regionRegex = try? NSRegularExpression(pattern: regionPattern, options: []),
+              let rm = regionRegex.firstMatch(in: sql, range: NSRange(sql.startIndex..., in: sql)),
+              rm.numberOfRanges > 1 else { return [] }
+        let region = (sql as NSString).substring(with: rm.range(at: 1))
+
+        // 2) 在区域内按 JOIN 关键词 / 逗号 切分表引用（^ 用于紧接 FROM 的首个表）。
+        //    表名必须以字母或下划线开头，避免把 IN (1,2) 里的数字误当表名。
+        let refPattern = #"(?i)(?:^|(?:\b(?:inner|left|right|outer|full|cross|natural)\s+)?join\b|,)\s*`?([a-zA-Z_][a-zA-Z0-9_]*)`?(?:\.`?([a-zA-Z_][a-zA-Z0-9_]*)`?)?(?:\s+(?:as\s+)?`?([a-zA-Z_][a-zA-Z0-9_]*)`?)?"#
+        guard let refRegex = try? NSRegularExpression(pattern: refPattern, options: []) else { return [] }
+        let rns = region as NSString
+        let mr = refRegex.matches(in: region, range: NSRange(location: 0, length: rns.length))
+        // 跟在表名后的 SQL 关键词不应被当作别名
         let kw = Set(["where","on","join","left","right","inner","outer","full","cross","natural","group","order","having","limit","set","values","and","or","union","by","as","using"])
         var res: [(String, String?)] = []
-        for m in ms {
-            let g1 = m.range(at: 1).location != NSNotFound ? ns.substring(with: m.range(at: 1)) : ""
-            let g2 = m.range(at: 2).location != NSNotFound ? ns.substring(with: m.range(at: 2)) : ""
-            let g3 = m.range(at: 3).location != NSNotFound ? ns.substring(with: m.range(at: 3)) : ""
+        for m in mr {
+            let g1 = m.range(at: 1).location != NSNotFound ? rns.substring(with: m.range(at: 1)) : ""
+            let g2 = m.range(at: 2).location != NSNotFound ? rns.substring(with: m.range(at: 2)) : ""
+            let g3 = m.range(at: 3).location != NSNotFound ? rns.substring(with: m.range(at: 3)) : ""
+            guard !g1.isEmpty else { continue }
             let table = g2.isEmpty ? g1 : g1 + "." + g2
             var alias: String? = nil
             if !g3.isEmpty, !kw.contains(g3.lowercased()) { alias = g3 }
@@ -175,32 +186,42 @@ struct QueryConsoleView: View {
     }
 
     /// 将限定符（别名或表名）解析为对应的表名。
+    /// 多表 JOIN 时（如 `a`/`b` 分别为两表的别名），各自解析到各自对应的表。
     private func resolveQualifier(_ qual: String) -> String? {
         let q = qual.uppercased()
+        // 1) 别名优先
         for (table, alias) in parsedFromTables {
             if let a = alias, a.uppercased() == q { return table }
         }
-        if parsedFromTables.contains(where: { $0.table.uppercased() == q }) { return qual }
+        // 2) 表名本身，或 db.table 的末段表名
+        for (table, _) in parsedFromTables {
+            if table.uppercased() == q { return table }
+            let parts = table.components(separatedBy: ".")
+            if parts.count == 2 && parts[1].uppercased() == q { return table }
+        }
         return nil
     }
 
     /// 取某张表的字段名列表（优先上下文表，其次缓存，必要时异步补加载）。
+    /// table 可能以「db.表」形式出现，加载与查找时统一取末段表名。
     private func columnsForTable(_ table: String) -> [String] {
-        if table == activeContextTable, !contextColumns.isEmpty {
+        let t = table.components(separatedBy: ".").last ?? table
+        if t == activeContextTable, !contextColumns.isEmpty {
             return contextColumns.map { $0.field }
         }
-        if let c = columnCache[table], !c.isEmpty {
+        if let c = columnCache[t], !c.isEmpty {
             return c.map { $0.field }
         }
-        Task { await loadColumnsForTable(table) }
-        return contextColumns.map { $0.field }
+        Task { await loadColumnsForTable(t) }
+        return (t == activeContextTable) ? contextColumns.map { $0.field } : (columnCache[t]?.map { $0.field } ?? [])
     }
 
     @MainActor private func loadColumnsForTable(_ table: String) async {
+        let t = table.components(separatedBy: ".").last ?? table
         guard let db = db else { return }
         do {
-            let cols = try await connection.listColumns(db: db, table: table)
-            await MainActor.run { self.columnCache[table] = cols }
+            let cols = try await connection.listColumns(db: db, table: t)
+            await MainActor.run { self.columnCache[t] = cols }
         } catch {
             // 个别表加载失败不影响其它补全
         }
