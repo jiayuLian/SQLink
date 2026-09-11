@@ -25,6 +25,7 @@ struct QueryConsoleView: View {
     @State private var contextTable: String = ""   // 手动从「上下文表」选择的表
     @State private var detectedTable: String = ""   // 从 SQL 文本自动解析出的表
     @State private var contextColumns: [ColumnInfo] = []
+    @State private var columnCache: [String: [ColumnInfo]] = [:]  // 各表字段缓存（多表 JOIN 补全用）
 
     // query history
     @State private var showHistory = false
@@ -78,11 +79,35 @@ struct QueryConsoleView: View {
     /// Suggestions = keywords + table names + current-table columns。
     /// 过滤规则见 matchesSuggestion：前缀优先，段感知（含子串）兜底。
     /// 例：输入 lvv_c / lvv_r 都能匹配 lvv_exchange_record；输入 config 也能匹配 lvv_user_config。
+    /// 特殊：输入 `别名.` 或 `表名.`（如 a. ）时，改提示该表/别名的字段名。
     /// 当「当前词」为空（刚输完一个词、位于词边界）时，展示默认候选列表。
     private var suggestions: [String] {
-        let w = currentWord.uppercased()
         // 完全空白（尚未输入任何内容）时不打扰用户
         if sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }
+
+        let raw = currentWord
+        // 限定符引用：a. 或 table. → 提示对应表的字段
+        if let dotRange = raw.lastIndex(of: ".") {
+            let qual = String(raw[..<dotRange])
+            let partial = String(raw[raw.index(after: dotRange)...])
+            if let table = resolveQualifier(qual) {
+                let cols = columnsForTable(table)
+                let w = partial.uppercased()
+                var seen = Set<String>()
+                var out: [String] = []
+                for item in cols {
+                    let u = item.uppercased()
+                    if w.isEmpty || matchesSuggestion(item, w), !seen.contains(u) {
+                        seen.insert(u)
+                        out.append(item)
+                    }
+                }
+                return Array(out.prefix(10))
+            }
+        }
+
+        // 默认：关键词 + 表名 + 当前上下文表的字段
+        let w = raw.uppercased()
         var pool: [String] = []
         pool.append(contentsOf: keywords)
         pool.append(contentsOf: tables)
@@ -124,6 +149,61 @@ struct QueryConsoleView: View {
         // 最后一段：在 item 的剩余段中，任一段前缀或包含它即可
         let last = tp.last!
         return ip[(tp.count - 1)...].contains { $0.hasPrefix(last) || $0.contains(last) }
+    }
+
+    // MARK: - 限定符解析（别名 / 表名 + 字段补全）
+
+    /// 从 FROM / JOIN 子句解析出 (表名, 别名?) 列表。
+    private var parsedFromTables: [(table: String, alias: String?)] {
+        let pattern = #"(?i)\b(?:from|join)\s+`?([a-zA-Z0-9_]+)`?(?:\.`?([a-zA-Z0-9_]+)`?)?(?:\s+(?:as\s+)?([a-zA-Z0-9_]+))?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
+        let ns = sql as NSString
+        let ms = regex.matches(in: sql, range: NSRange(location: 0, length: ns.length))
+        // 跟在表名后的关键词不应被当作别名
+        let kw = Set(["where","on","join","left","right","inner","outer","full","cross","natural","group","order","having","limit","set","values","and","or","union","by","as","using"])
+        var res: [(String, String?)] = []
+        for m in ms {
+            let g1 = m.range(at: 1).location != NSNotFound ? ns.substring(with: m.range(at: 1)) : ""
+            let g2 = m.range(at: 2).location != NSNotFound ? ns.substring(with: m.range(at: 2)) : ""
+            let g3 = m.range(at: 3).location != NSNotFound ? ns.substring(with: m.range(at: 3)) : ""
+            let table = g2.isEmpty ? g1 : g1 + "." + g2
+            var alias: String? = nil
+            if !g3.isEmpty, !kw.contains(g3.lowercased()) { alias = g3 }
+            res.append((table, alias))
+        }
+        return res
+    }
+
+    /// 将限定符（别名或表名）解析为对应的表名。
+    private func resolveQualifier(_ qual: String) -> String? {
+        let q = qual.uppercased()
+        for (table, alias) in parsedFromTables {
+            if let a = alias, a.uppercased() == q { return table }
+        }
+        if parsedFromTables.contains(where: { $0.table.uppercased() == q }) { return qual }
+        return nil
+    }
+
+    /// 取某张表的字段名列表（优先上下文表，其次缓存，必要时异步补加载）。
+    private func columnsForTable(_ table: String) -> [String] {
+        if table == activeContextTable, !contextColumns.isEmpty {
+            return contextColumns.map { $0.field }
+        }
+        if let c = columnCache[table], !c.isEmpty {
+            return c.map { $0.field }
+        }
+        Task { await loadColumnsForTable(table) }
+        return contextColumns.map { $0.field }
+    }
+
+    @MainActor private func loadColumnsForTable(_ table: String) async {
+        guard let db = db else { return }
+        do {
+            let cols = try await connection.listColumns(db: db, table: table)
+            await MainActor.run { self.columnCache[table] = cols }
+        } catch {
+            // 个别表加载失败不影响其它补全
+        }
     }
 
     /// 自动补全用的「当前上下文表」：手动选择优先，否则用从 SQL 解析出的表。
@@ -378,15 +458,26 @@ struct QueryConsoleView: View {
         }
         do {
             let cols = try await connection.listColumns(db: db, table: ct)
-            await MainActor.run { self.contextColumns = cols }
+            await MainActor.run {
+                self.contextColumns = cols
+                self.columnCache[ct] = cols
+            }
         } catch {
             await MainActor.run { self.contextColumns = [] }
         }
     }
 
-    /// 将候选词填入编辑器：当前词为空（末尾/开头词边界）→ 末尾追加；否则替换当前词。
+    /// 将候选词填入编辑器：
+    /// - 限定符引用（a. / table.）：保留「限定符.」前缀，仅替换点后的部分；
+    /// - 当前词为空（末尾/开头词边界）：末尾追加；
+    /// - 否则：替换当前词。
     private func applySuggestion(_ suggestion: String) {
         let cw = currentWord
+        if let dotRange = cw.lastIndex(of: ".") {
+            let prefix = String(cw[...dotRange]) // 含最后的点
+            sql = String(sql.dropLast(cw.count)) + prefix + suggestion + " "
+            return
+        }
         if cw.isEmpty {
             let needsSpace = !sql.isEmpty && !sql.hasSuffix(" ")
             sql = sql + (needsSpace ? " " : "") + suggestion + " "
