@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - SQL WHERE / ORDER helpers
 private func quoteLikeLiteral(_ s: String) -> String {
@@ -62,7 +63,25 @@ private func buildOrderBy(field: String, direction: SortDirection) -> String? {
     field.isEmpty ? nil : "`\(field.replacingOccurrences(of: "`", with: "``"))` \(direction.rawValue.uppercased())"
 }
 
-// MARK: - DDL 美化与高亮
+// MARK: - DDL 美化与高亮（配色参考 Navicat 表结构 DDL 视图）
+
+/// 自适应明暗主题的配色：浅色下取 Navicat 原色，深色下提亮以保证可读性。
+private func ddlColor(light: UIColor, dark: UIColor) -> Color {
+    Color(UIColor(dynamicProvider: { $0.userInterfaceStyle == .dark ? dark : light }))
+}
+
+/// 关键字 / 数据类型 / 运算符 —— 蓝（Navicat 关键字色 #097BF7）
+private let ddlKeywordColor = ddlColor(light: UIColor(red: 0.04, green: 0.48, blue: 0.97, alpha: 1),
+                                       dark: UIColor(red: 0.31, green: 0.66, blue: 1.00, alpha: 1))
+/// 字符串字面量 —— 红（Navicat 字符串色 #FF1744）
+private let ddlStringColor = ddlColor(light: UIColor(red: 1.00, green: 0.09, blue: 0.27, alpha: 1),
+                                      dark: UIColor(red: 1.00, green: 0.42, blue: 0.49, alpha: 1))
+/// 数字字面量 —— 绿（Navicat 数字色 #0BC853）
+private let ddlNumberColor = ddlColor(light: UIColor(red: 0.04, green: 0.78, blue: 0.33, alpha: 1),
+                                      dark: UIColor(red: 0.21, green: 0.82, blue: 0.48, alpha: 1))
+/// 注释 —— 次要文本色
+private let ddlCommentColor = Color.secondary
+
 private let sqlKeywordSet: Set<String> = [
     "CREATE","TABLE","TEMPORARY","PRIMARY","KEY","NOT","NULL","DEFAULT","UNIQUE",
     "AUTO_INCREMENT","ENGINE","CHARSET","COLLATE","CONSTRAINT","FOREIGN","REFERENCES",
@@ -70,8 +89,40 @@ private let sqlKeywordSet: Set<String> = [
     "EXISTS","ALGORITHM","LOCK","FULLTEXT","SPATIAL","VIEW","AS","SELECT","FROM",
     "WHERE","AND","OR","ORDER","BY","LIMIT","INNER","LEFT","RIGHT","OUTER","JOIN",
     "SET","VALUES","INSERT","INTO","REPLACE","DROP","ALTER","ADD","MODIFY","CHANGE",
-    "DESC","ASC","DISTINCT","GROUP","HAVING","LIKE","IN","IS","BETWEEN"
+    "DESC","ASC","DISTINCT","GROUP","HAVING","LIKE","IN","IS","BETWEEN",
+    // 表选项 / 索引 / 分区等
+    "USING","BTREE","HASH","ROW_FORMAT","PARTITION","RANGE","LIST","MAXVALUE",
+    "GENERATED","STORED","VIRTUAL","ALWAYS","INVISIBLE","VISIBLE","CHECK",
+    "TABLESPACE","ENCRYPTION","COMPRESSION","AVG_ROW_LENGTH","KEY_BLOCK_SIZE",
+    "STATS_PERSISTENT","STATS_AUTO_RECALC","STATS_SAMPLE_PAGES","CHECKSUM",
+    "DELAY_KEY_WRITE","PACK_KEYS","MAX_ROWS","MIN_ROWS","INSERT_METHOD","PARSER",
+    "WITH","LESS","THAN","COLUMNS",
+    // 默认值常用函数
+    "CURRENT_TIMESTAMP","CURRENT_DATE","CURRENT_TIME","NOW","LOCALTIME",
+    "LOCALTIMESTAMP","UTC_TIMESTAMP"
 ]
+
+/// 数据类型（Navicat 中与关键字同为蓝色）
+private let sqlTypeSet: Set<String> = [
+    "BIT","BOOL","BOOLEAN","TINYINT","SMALLINT","MEDIUMINT","INT","INTEGER","BIGINT",
+    "DECIMAL","DEC","NUMERIC","FLOAT","DOUBLE","REAL","SERIAL","FIXED",
+    "DATE","DATETIME","TIMESTAMP","TIME","YEAR",
+    "CHAR","VARCHAR","NCHAR","NVARCHAR","CHARACTER","VARYING","NATIONAL","LONG",
+    "BINARY","VARBINARY","TINYBLOB","BLOB","MEDIUMBLOB","LONGBLOB","LONGTEXT",
+    "TINYTEXT","TEXT","MEDIUMTEXT","ENUM","JSON","UUID","INET6",
+    "GEOMETRY","POINT","LINESTRING","POLYGON","MULTIPOINT",
+    "MULTILINESTRING","MULTIPOLYGON","GEOMETRYCOLLECTION"
+]
+
+/// 这些关键字后面直接跟「取值」而不带等号，如 CHARACTER SET utf8mb4、COLLATE xxx、USING BTREE。
+private let sqlValueKeywordSet: Set<String> = ["CHARACTER", "SET", "COLLATE", "CHARSET", "ENGINE", "USING", "ROW_FORMAT"]
+
+/// 运算符字符（= < > + - 等），在 DDL 中与关键字同色。
+private let sqlOperatorChars: Set<Character> = ["=", "<", ">", "!", "+", "-", "*", "/", "%", "|", "&", "^", "~"]
+
+private func isSQLOperator(_ token: String) -> Bool {
+    !token.isEmpty && token.allSatisfy { sqlOperatorChars.contains($0) }
+}
 
 /// 把 SHOW CREATE TABLE 的整段语句整理成带缩进的多行文本（只增删空白，不改变 SQL 语义）。
 private func formatCreateTable(_ raw: String) -> String {
@@ -120,33 +171,48 @@ private func formatCreateTable(_ raw: String) -> String {
     return out
 }
 
-/// 简易 SQL 语法高亮：关键字 / 反引号标识符 / 字符串 / 数字 分别着色，类似数据库客户端。
+/// 简易 SQL 语法高亮：关键字 / 数据类型 / 运算符 = 蓝，字符串 = 红，数字 = 绿，
+/// 反引号标识符与标点保持默认前景色（与 Navicat 表结构 DDL 视图一致）。
 private func highlightSQL(_ source: String) -> AttributedString {
     var result = AttributedString()
-    let pattern = "(--[^\\n]*|#[^\\n]*|/\\*.*?\\*/|'[^']*'|`[^`]*`|\\d+(?:\\.\\d+)?|[A-Za-z_][A-Za-z0-9_]*|\\s+|[(),;.]|[^\\s])"
+    let pattern = "(--[^\\n]*|#[^\\n]*|/\\*.*?\\*/|'[^']*'|`[^`]*`|\\d+(?:\\.\\d+)?|[A-Za-z_][A-Za-z0-9_]*|\\s+|[(),;.]|[=<>!+\\-*/%|&^~]+|[^\\s])"
     guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
         return AttributedString(source)
     }
     let ns = source as NSString
     let matches = re.matches(in: source, range: NSRange(location: 0, length: ns.length))
-    let kwColor = Color.accentColor
-    let idColor = Color(red: 0.16, green: 0.55, blue: 0.38)
-    let strColor = Color(red: 0.78, green: 0.42, blue: 0.12)
-    let numColor = Color(red: 0.50, green: 0.28, blue: 0.70)
+    // 取值着色：Navicat 会把「选项取值」也着成蓝色，两种写法都要覆盖 ——
+    //   带等号：ENGINE=InnoDB / CHARSET=utf8mb4 / ROW_FORMAT=DYNAMIC（数字仍保持绿色）
+    //   不带等号：CHARACTER SET utf8mb4 / COLLATE utf8mb4_unicode_ci / USING BTREE
+    var valuePending = false
     for m in matches {
         guard let range = Range(m.range, in: source) else { continue }
         let token = String(source[range])
         var attr = AttributedString(token)
+        if token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            result += attr                    // 空白原样保留，不打断取值判定
+            continue
+        }
+        let isValue = valuePending
+        valuePending = false
         if token.hasPrefix("`") {
-            attr.foregroundColor = idColor
+            // 反引号标识符（库/表/字段名）：默认前景色；但作为取值时着蓝色
+            if isValue { attr.foregroundColor = ddlKeywordColor }
         } else if token.hasPrefix("'") {
-            attr.foregroundColor = strColor
+            attr.foregroundColor = ddlStringColor
         } else if token.hasPrefix("--") || token.hasPrefix("#") || token.hasPrefix("/*") {
-            attr.foregroundColor = Color.gray
-        } else if let _ = Double(token), token.rangeOfCharacter(from: .decimalDigits) != nil {
-            attr.foregroundColor = numColor
-        } else if sqlKeywordSet.contains(token.uppercased()) {
-            attr.foregroundColor = kwColor
+            attr.foregroundColor = ddlCommentColor
+        } else if Double(token) != nil {
+            attr.foregroundColor = ddlNumberColor
+        } else if isSQLOperator(token) {
+            attr.foregroundColor = ddlKeywordColor
+            if token == "=" { valuePending = true }
+        } else {
+            let upper = token.uppercased()
+            if sqlKeywordSet.contains(upper) || sqlTypeSet.contains(upper) || isValue {
+                attr.foregroundColor = ddlKeywordColor
+            }
+            if sqlValueKeywordSet.contains(upper) { valuePending = true }
         }
         result += attr
     }
@@ -323,7 +389,7 @@ struct TableDetailView: View {
     private func loadDDL() async {
         ddlLoading = true; ddlError = nil; ddlText = ""
         do {
-            let sql = try await connection.showCreateTable(db: db, table: table)
+            let sql = try await withReconnect { try await connection.showCreateTable(db: db, table: table) }
             await MainActor.run {
                 self.ddlText = sql
                 self.ddlLoading = false
@@ -385,8 +451,8 @@ struct TableDetailView: View {
     private func load() async {
         await MainActor.run { loading = true; error = nil }
         do {
-            async let cols = connection.listColumns(db: db, table: table)
-            async let cnt = connection.countRows(db: db, table: table, whereClause: activeWhere)
+            async let cols = withReconnect { try await connection.listColumns(db: db, table: table) }
+            async let cnt = withReconnect { try await connection.countRows(db: db, table: table, whereClause: activeWhere) }
             let c = try await cols
             let n = try await cnt
             await MainActor.run {
