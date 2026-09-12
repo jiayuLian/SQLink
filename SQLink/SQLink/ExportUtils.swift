@@ -96,7 +96,7 @@ struct ExportUtils {
         let fileName = format == .csv ? "\(safeTable)_\(ts).csv" : "\(safeTable)_\(ts).sql"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
 
-        let total = try await connection.countRows(db: db, table: table, whereClause: whereClause)
+        let total = try await withReconnect(connection) { try await connection.countRows(db: db, table: table, whereClause: whereClause) }
         let limit = maxRows ?? total
         guard limit > 0 else {
             // 空结果也生成一个空文件，保证分享面板能弹出
@@ -113,9 +113,7 @@ struct ExportUtils {
         var wroteHeader = false
         while fetched < limit, offset < total {
             let take = min(chunkSize, limit - fetched, max(1, total - offset))
-            let r = try await connection.fetchRows(db: db, table: table,
-                                                   limit: take, offset: offset,
-                                                   whereClause: whereClause, orderBy: orderBy)
+            let r = try await withReconnect(connection) { try await connection.fetchRows(db: db, table: table, limit: take, offset: offset, whereClause: whereClause, orderBy: orderBy) }
             guard case .result(let cols, let rows) = r else { break }
             if cols.isEmpty { break }
             if format == .csv {

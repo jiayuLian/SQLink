@@ -220,7 +220,7 @@ struct QueryConsoleView: View {
         let t = table.components(separatedBy: ".").last ?? table
         guard let db = db else { return }
         do {
-            let cols = try await connection.listColumns(db: db, table: t)
+            let cols = try await withReconnect(connection) { try await connection.listColumns(db: db, table: t) }
             await MainActor.run { self.columnCache[t] = cols }
         } catch {
             // 个别表加载失败不影响其它补全
@@ -421,7 +421,7 @@ struct QueryConsoleView: View {
 
     private func loadTables(db: String) async {
         do {
-            let list = try await connection.listTables(db: db).map { $0.name }
+            let list = try await withReconnect(connection) { try await connection.listTables(db: db) }.map { $0.name }
             await MainActor.run { self.tables = list }
         } catch {
             await MainActor.run { self.tables = [] }
@@ -478,7 +478,7 @@ struct QueryConsoleView: View {
             return
         }
         do {
-            let cols = try await connection.listColumns(db: db, table: ct)
+            let cols = try await withReconnect(connection) { try await connection.listColumns(db: db, table: ct) }
             await MainActor.run {
                 self.contextColumns = cols
                 self.columnCache[ct] = cols
@@ -605,7 +605,7 @@ struct QueryConsoleView: View {
             var lastRows: [[String?]] = []
             var okCount = 0
             for s in stmts {
-                let r = try await connection.query(s)
+                let r = try await withReconnect(connection) { try await connection.query(s) }
                 switch r {
                 case .ok: okCount += 1; lastCols = []; lastRows = []
                 case .result(let c, let rw): lastCols = c; lastRows = rw
@@ -680,7 +680,7 @@ struct QueryConsoleView: View {
                 guard !sets.isEmpty else { continue }
                 let pkVal = quoteVal(pkRaw)
                 let sqlUpd = "UPDATE `\(editDB.replacingOccurrences(of: "`", with: "``"))`.`\(editTable.replacingOccurrences(of: "`", with: "``"))` SET \(sets.joined(separator: ", ")) WHERE `\(pk.replacingOccurrences(of: "`", with: "``"))` = \(pkVal) LIMIT 1"
-                let r = try await connection.query(sqlUpd)
+                let r = try await withReconnect(connection) { try await connection.query(sqlUpd) }
                 // 影响行数为 0 表示没有匹配到任何记录，不能报「保存成功」
                 if case .ok(let n) = r, n == 0 { failed += 1 }
             }
@@ -739,7 +739,7 @@ struct QueryConsoleView: View {
         }
         guard !useDB.isEmpty else { await MainActor.run { canEdit = false }; return }
         do {
-            let cols = try await connection.listColumns(db: useDB, table: tableName)
+            let cols = try await withReconnect(connection) { try await connection.listColumns(db: useDB, table: tableName) }
             guard !cols.isEmpty else { await MainActor.run { canEdit = false }; return }
             let pk = cols.first { $0.key == "PRI" }?.field ?? cols.first { $0.key == "UNI" }?.field
             guard let pk = pk else { await MainActor.run { canEdit = false }; return }

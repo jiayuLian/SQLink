@@ -1082,10 +1082,10 @@ struct TableDataView: View {
     }
 }
 
-// MARK: - 死连接自动重连（文件级，供 TableDetailView / TableDataView 共用）
+// MARK: - 死连接自动重连（模块级，供所有视图共用）
 
 /// 连接断开（写入数据失败 / 被服务器关闭）时自动重连一次再重试，避免「点击查看数据却报写入失败」。
-fileprivate func withReconnect<T>(_ connection: MySQLConnection, _ body: () async throws -> T) async throws -> T {
+func withReconnect<T>(_ connection: MySQLConnection, _ body: () async throws -> T) async throws -> T {
     do {
         return try await body()
     } catch let e as MySQLError where e.isDeadConnection {

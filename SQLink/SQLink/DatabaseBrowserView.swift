@@ -121,7 +121,7 @@ struct TableListView: View {
 
     func load() async {
         do {
-            let t = try await connection.listTables(db: db)
+            let t = try await withReconnect(connection) { try await connection.listTables(db: db) }
             await MainActor.run { self.tables = t }
         } catch {
             let msg = error.localizedDescription
