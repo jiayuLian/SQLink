@@ -248,94 +248,94 @@ struct TableDetailView: View {
     @State private var activeOrderBy: String? = nil
 
     var body: some View {
-        List {
-            Section("结构（\(columns.count) 列）") {
-                if columns.isEmpty {
-                    Text("加载中…").foregroundColor(.secondary)
-                }
-                ForEach(columns) { c in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(c.field).font(.system(size: 14, weight: .bold))
-                            Spacer()
-                            if !c.key.isEmpty && c.key != " " {
-                                Text(c.key).font(.caption).padding(.horizontal, 6)
-                                    .background(Color.accentColor.opacity(0.15))
-                                    .foregroundColor(.accentColor)
-                                    .cornerRadius(4)
+        ZStack {
+            List {
+                Section("结构（\(columns.count) 列）") {
+                    if columns.isEmpty {
+                        Text("加载中…").foregroundColor(.secondary)
+                    }
+                    ForEach(columns) { c in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(c.field).font(.system(size: 14, weight: .bold))
+                                Spacer()
+                                if !c.key.isEmpty && c.key != " " {
+                                    Text(c.key).font(.caption).padding(.horizontal, 6)
+                                        .background(Color.accentColor.opacity(0.15))
+                                        .foregroundColor(.accentColor)
+                                        .cornerRadius(4)
+                                }
+                            }
+                            Text("\(c.type)  \(c.null == "NO" ? "NOT NULL" : "NULL")")
+                                .font(.caption).foregroundColor(.secondary)
+                            if !c.comment.isEmpty {
+                                Text("备注：\(c.comment)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                         }
-                        Text("\(c.type)  \(c.null == "NO" ? "NOT NULL" : "NULL")")
-                            .font(.caption).foregroundColor(.secondary)
-                        if !c.comment.isEmpty {
-                            Text("备注：\(c.comment)")
+                    }
+                    Button { showDDL = true } label: {
+                        Label("查看建表 SQL", systemImage: "doc.plaintext")
+                    }
+                }
+    
+                Section {
+                    if activeWhere != nil || activeOrderBy != nil {
+                        HStack {
+                            Text(filterStatusSummary)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .lineLimit(1)
+                            Spacer()
                         }
                     }
                 }
-                Button { showDDL = true } label: {
-                    Label("查看建表 SQL", systemImage: "doc.plaintext")
-                }
-            }
-
-            Section {
-                if activeWhere != nil || activeOrderBy != nil {
-                    HStack {
-                        Text(filterStatusSummary)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                        Spacer()
-                    }
-                }
-            }
-
-            Section {
-                NavigationLink {
-                    TableDataView(connection: connection, db: db, table: table,
-                                  conditions: $filterConditions,
-                                  sortField: $sortField,
-                                  sortDirection: $sortDirection,
-                                  filterLogic: $filterLogic,
-                                  activeWhere: $activeWhere,
-                                  activeOrderBy: $activeOrderBy)
-                } label: {
-                    HStack {
-                        Label("查看数据", systemImage: "tablecells")
-                        Spacer()
-                        if let n = rowCount {
-                            Text("匹配 \(n) 条").font(.caption).foregroundColor(.secondary)
-                        } else {
-                            Text("加载中…").font(.caption).foregroundColor(.secondary)
+    
+                Section {
+                    NavigationLink {
+                        TableDataView(connection: connection, db: db, table: table,
+                                      conditions: $filterConditions,
+                                      sortField: $sortField,
+                                      sortDirection: $sortDirection,
+                                      filterLogic: $filterLogic,
+                                      activeWhere: $activeWhere,
+                                      activeOrderBy: $activeOrderBy)
+                    } label: {
+                        HStack {
+                            Label("查看数据", systemImage: "tablecells")
+                            Spacer()
+                            if let n = rowCount {
+                                Text("匹配 \(n) 条").font(.caption).foregroundColor(.secondary)
+                            } else {
+                                Text("加载中…").font(.caption).foregroundColor(.secondary)
+                            }
                         }
                     }
                 }
+    
+                Section {
+                    NavigationLink("打开查询控制台", destination: QueryConsoleView(connection: connection, db: db, defaultTable: table))
+                }
             }
-
-            Section {
-                NavigationLink("打开查询控制台", destination: QueryConsoleView(connection: connection, db: db, defaultTable: table))
+            .navigationTitle(table)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showFilter = true } label: {
+                        Label("筛选&排序", systemImage: "line.3.horizontal.decrease.circle")
+                    }
+                }
             }
-        }
-        .navigationTitle(table)
-        .navigationBarTitleDisplayMode(.inline)
-        .overlay {
+            .onChange(of: activeWhere) { _ in
+                Task { await load() }
+            }
+            .onChange(of: activeOrderBy) { _ in
+                Task { await load() }
+            }
+            .task { await load() }
             if showFilter { filterOverlay }
         }
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button { showFilter = true } label: {
-                    Label("筛选&排序", systemImage: "line.3.horizontal.decrease.circle")
-                }
-            }
-        }
-        .onChange(of: activeWhere) { _ in
-            Task { await load() }
-        }
-        .onChange(of: activeOrderBy) { _ in
-            Task { await load() }
-        }
-        .task { await load() }
         .sheet(isPresented: $showDDL) {
             NavigationView {
                 Group {
