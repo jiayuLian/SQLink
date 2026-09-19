@@ -41,7 +41,6 @@ struct MembershipData: Decodable {
 struct MembershipInfoData: Decodable {
     let email: String?
     let avatar: String?
-    let nickname: String?
 }
 
 struct AvatarData: Decodable {
@@ -76,22 +75,32 @@ final class AuthService {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
         let (data, response) = try await URLSession.shared.data(for: req)
+        let httpResp = response as? HTTPURLResponse
         // 滑动续期：后端在 token 临近过期时会通过 x-auth-token 响应头返回新签发的 30 天 token，
         // 前端据此刷新本地 token，活跃用户不会在 30 天到期时突然掉线。
-        if let httpResp = response as? HTTPURLResponse,
-           let newToken = httpResp.value(forHTTPHeaderField: "x-auth-token"), !newToken.isEmpty {
+        if let newToken = httpResp?.value(forHTTPHeaderField: "x-auth-token"), !newToken.isEmpty {
             await MainActor.run { AppSettings.shared.authToken = newToken }
+        }
+        // token 失效（过期 / 被服务端拒绝 / 改过密码）：清除本地登录态，回到登录页。
+        // 这样「90 天绝对上限」触发或 token 被吊销时，用户会被平滑引导重新登录，
+        // 而不是停留在「已登录但所有请求都 401」的卡死状态。
+        if httpResp?.statusCode == 401 {
+            await MainActor.run { AppSettings.shared.logout() }
+        }
+        // 404：Express 返回的是一页 HTML（"Cannot POST /xxx"），不是 JSON。
+        // 直接解码只会抛出英文 DecodingError，用户看到 "The data couldn't be read…" 无从下手；
+        // 单独识别出来，明确告知「后端未更新 / 接口不存在」。
+        if httpResp?.statusCode == 404 {
+            throw AuthError.message("服务端没有该接口（后端可能尚未更新，请先部署最新后端）")
         }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let resp = try decoder.decode(APIResponse<T>.self, from: data)
-        // token 失效（过期 / 被服务端拒绝）：清除本地登录态，回到登录页。
-        // 这样「90 天绝对上限」触发或 token 被吊销时，用户会被平滑引导重新登录，
-        // 而不是停留在「已登录但所有请求都 401」的卡死状态。
-        if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 401 {
-            await MainActor.run { AppSettings.shared.logout() }
+        do {
+            return try decoder.decode(APIResponse<T>.self, from: data)
+        } catch {
+            // 非 JSON 响应或字段不匹配：统一转成中文提示，不把 DecodingError 抛到界面上。
+            throw AuthError.invalidResponse
         }
-        return resp
     }
 
     private func require<T>(_ resp: APIResponse<T>, extract: (T) -> Bool) async throws {

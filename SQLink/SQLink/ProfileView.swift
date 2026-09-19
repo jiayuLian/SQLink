@@ -28,7 +28,7 @@ struct ProfileView: View {
     @State private var reauthing = false
     @State private var reauthError: String?
 
-    // 修改密码（仅已登录态）：邮箱验证码校验 → 重置为新密码 → 强制重新登录
+    // 修改密码（仅已登录态）：校验当前密码 → 重置为新密码 → 强制重新登录
     @State private var showChangePassword = false
 
     var body: some View {
@@ -118,8 +118,8 @@ struct ProfileView: View {
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showLogin) { AuthView(onDismiss: { showLogin = false }) }
-            // 修改密码：走邮箱验证码（复用后端 forgot-password/code + reset-password）。
-            // 取消只关弹窗；改成功才登出（强制用新密码重新登录）。
+            // 修改密码：走 POST /api/auth/change-password（需登录 + 校验当前密码）。
+            // 取消只关弹窗；改成功才登出（后端会让旧 token 立即失效，必须用新密码重新登录）。
             .sheet(isPresented: $showChangePassword) {
                 ChangePasswordView(
                     onCancel: { showChangePassword = false },
