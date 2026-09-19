@@ -248,94 +248,94 @@ struct TableDetailView: View {
     @State private var activeOrderBy: String? = nil
 
     var body: some View {
-        ZStack {
-            List {
-                Section("结构（\(columns.count) 列）") {
-                    if columns.isEmpty {
-                        Text("加载中…").foregroundColor(.secondary)
-                    }
-                    ForEach(columns) { c in
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text(c.field).font(.system(size: 14, weight: .bold))
-                                Spacer()
-                                if !c.key.isEmpty && c.key != " " {
-                                    Text(c.key).font(.caption).padding(.horizontal, 6)
-                                        .background(Color.accentColor.opacity(0.15))
-                                        .foregroundColor(.accentColor)
-                                        .cornerRadius(4)
-                                }
-                            }
-                            Text("\(c.type)  \(c.null == "NO" ? "NOT NULL" : "NULL")")
-                                .font(.caption).foregroundColor(.secondary)
-                            if !c.comment.isEmpty {
-                                Text("备注：\(c.comment)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+        List {
+            Section("结构（\(columns.count) 列）") {
+                if columns.isEmpty {
+                    Text("加载中…").foregroundColor(.secondary)
+                }
+                ForEach(columns) { c in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(c.field).font(.system(size: 14, weight: .bold))
+                            Spacer()
+                            if !c.key.isEmpty && c.key != " " {
+                                Text(c.key).font(.caption).padding(.horizontal, 6)
+                                    .background(Color.accentColor.opacity(0.15))
+                                    .foregroundColor(.accentColor)
+                                    .cornerRadius(4)
                             }
                         }
-                    }
-                    Button { showDDL = true } label: {
-                        Label("查看建表 SQL", systemImage: "doc.plaintext")
-                    }
-                }
-    
-                Section {
-                    if activeWhere != nil || activeOrderBy != nil {
-                        HStack {
-                            Text(filterStatusSummary)
+                        Text("\(c.type)  \(c.null == "NO" ? "NOT NULL" : "NULL")")
+                            .font(.caption).foregroundColor(.secondary)
+                        if !c.comment.isEmpty {
+                            Text("备注：\(c.comment)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                                .lineLimit(1)
-                            Spacer()
                         }
                     }
                 }
-    
-                Section {
-                    NavigationLink {
-                        TableDataView(connection: connection, db: db, table: table,
-                                      conditions: $filterConditions,
-                                      sortField: $sortField,
-                                      sortDirection: $sortDirection,
-                                      filterLogic: $filterLogic,
-                                      activeWhere: $activeWhere,
-                                      activeOrderBy: $activeOrderBy)
-                    } label: {
-                        HStack {
-                            Label("查看数据", systemImage: "tablecells")
-                            Spacer()
-                            if let n = rowCount {
-                                Text("匹配 \(n) 条").font(.caption).foregroundColor(.secondary)
-                            } else {
-                                Text("加载中…").font(.caption).foregroundColor(.secondary)
-                            }
+                Button { showDDL = true } label: {
+                    Label("查看建表 SQL", systemImage: "doc.plaintext")
+                }
+            }
+
+            Section {
+                if activeWhere != nil || activeOrderBy != nil {
+                    HStack {
+                        Text(filterStatusSummary)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                }
+            }
+
+            Section {
+                NavigationLink {
+                    TableDataView(connection: connection, db: db, table: table,
+                                  conditions: $filterConditions,
+                                  sortField: $sortField,
+                                  sortDirection: $sortDirection,
+                                  filterLogic: $filterLogic,
+                                  activeWhere: $activeWhere,
+                                  activeOrderBy: $activeOrderBy)
+                } label: {
+                    HStack {
+                        Label("查看数据", systemImage: "tablecells")
+                        Spacer()
+                        if let n = rowCount {
+                            Text("匹配 \(n) 条").font(.caption).foregroundColor(.secondary)
+                        } else {
+                            Text("加载中…").font(.caption).foregroundColor(.secondary)
                         }
                     }
                 }
-    
-                Section {
-                    NavigationLink("打开查询控制台", destination: QueryConsoleView(connection: connection, db: db, defaultTable: table))
-                }
             }
-            .navigationTitle(table)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showFilter = true } label: {
-                        Label("筛选&排序", systemImage: "line.3.horizontal.decrease.circle")
-                    }
-                }
+
+            Section {
+                NavigationLink("打开查询控制台", destination: QueryConsoleView(connection: connection, db: db, defaultTable: table))
             }
-            .onChange(of: activeWhere) { _ in
-                Task { await load() }
-            }
-            .onChange(of: activeOrderBy) { _ in
-                Task { await load() }
-            }
-            .task { await load() }
-            if showFilter { filterOverlay }
         }
+        .navigationTitle(table)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { showFilter = true } label: {
+                    Label("筛选&排序", systemImage: "line.3.horizontal.decrease.circle")
+                }
+            }
+        }
+        .onChange(of: activeWhere) { _ in
+            Task { await load() }
+        }
+        .onChange(of: activeOrderBy) { _ in
+            Task { await load() }
+        }
+        .task { await load() }
+
+        // 筛选 & 排序弹窗：改用系统 sheet（见 filterSheet 注释）。
+        .sheet(isPresented: $showFilter) { filterSheet }
         .sheet(isPresented: $showDDL) {
             NavigationView {
                 Group {
@@ -420,32 +420,22 @@ struct TableDetailView: View {
         return parts.joined(separator: "，")
     }
 
-    /// 自定义筛选弹窗 overlay（表详情页用），与 TableDataView 保持一致，避免 sheet dismiss 残留遮罩。
-    private var filterOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.35)
-                .ignoresSafeArea()
-                .onTapGesture { showFilter = false }
-            VStack(spacing: 0) {
-                TableFilterView(columns: columns,
-                                conditions: $filterConditions,
-                                sortField: $sortField,
-                                sortDirection: $sortDirection,
-                                filterLogic: $filterLogic,
-                                isPresented: $showFilter,
-                                db: db,
-                                table: table,
-                                connection: connection,
-                                onApply: { w, o in
-                                    activeWhere = w; activeOrderBy = o
-                                })
-            }
-            .background(Color(.systemBackground))
-            .cornerRadius(12)
-            .padding(.horizontal, 16)
-            .frame(maxHeight: UIScreen.main.bounds.height * 0.85)
-            .shadow(radius: 10)
-        }
+    /// 筛选 & 排序弹窗：用系统 `.sheet` 呈现。
+    /// 旧实现是自定义 `.overlay`（全屏变暗色 + 卡片）叠在 NavigationView 的内容层上，
+    /// 其上还带一个 `.onTapGesture` 关闭手势；这种手写模态与宿主 List 的手势/命中测试
+    /// 会互相干扰，导致「取消/清除/应用」偶发点不动（必须退出重进才恢复）。
+    /// 系统 sheet 由 UIKit 独立呈现，不受宿主视图重绘与手势层影响，从根上规避该问题。
+    private var filterSheet: some View {
+        TableFilterView(columns: columns,
+                        conditions: $filterConditions,
+                        sortField: $sortField,
+                        sortDirection: $sortDirection,
+                        filterLogic: $filterLogic,
+                        isPresented: $showFilter,
+                        db: db, table: table, connection: connection,
+                        onApply: { w, o in
+                            activeWhere = w; activeOrderBy = o
+                        })
     }
 
     private func load() async {
@@ -622,9 +612,14 @@ struct FilterConditionRow: View {
                 }
                 .pickerStyle(.menu)
                 Spacer()
+                // 必须用 .borderless：否则在 List/Form 行里整行都会被当成这个按钮的点击区域
                 Button(role: .destructive) { onDelete() } label: {
                     Image(systemName: "trash")
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.borderless)
+                .tint(.red)   // borderless 会丢掉 role 的破坏色，显式锁红
             }
 
             Picker("运算符", selection: $condition.op) {
@@ -747,6 +742,7 @@ struct TableDataView: View {
             }
             .onChange(of: settings.pageSize) { _ in Task { await load() } }
             .task { await load() }
+            .sheet(isPresented: $showFilter) { filterSheet }
     }
 
     private var mainContent: some View {
@@ -849,39 +845,26 @@ struct TableDataView: View {
                     .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(Color.gray.opacity(0.04))
                 }
-                // 导出进度遮罩 与 筛选弹窗（用 overlay 替代 sheet，避免 iOS sheet dismiss 后留下透明遮罩吞掉 body 点击）
+                // 导出进度遮罩：仅导出中显示，需要拦住底层点击，故继续用 overlay（短时、无交互按钮）
                 .overlay {
                     if exportState.isExporting { exportOverlay }
-                    if showFilter { filterOverlay }
                 }
             }
         }
     }
 
-    /// 自定义筛选弹窗 overlay：背景遮罩 + 卡片式弹窗，不依赖 .sheet 的 presentationController。
-    private var filterOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.35)
-                .ignoresSafeArea()
-                .onTapGesture { showFilter = false }
-            VStack(spacing: 0) {
-                TableFilterView(columns: columns,
-                                conditions: $conditions,
-                                sortField: $sortField,
-                                sortDirection: $sortDirection,
-                                filterLogic: $filterLogic,
-                                isPresented: $showFilter,
-                                db: db, table: table, connection: connection,
-                                onApply: { w, o in
-                                    activeWhere = w; activeOrderBy = o
-                                })
-            }
-            .background(Color(.systemBackground))
-            .cornerRadius(12)
-            .padding(.horizontal, 16)
-            .frame(maxHeight: UIScreen.main.bounds.height * 0.85)
-            .shadow(radius: 10)
-        }
+    /// 筛选 & 排序弹窗：与表结构页一致，用系统 `.sheet`（理由见 TableDetailView.filterSheet 注释）。
+    private var filterSheet: some View {
+        TableFilterView(columns: columns,
+                        conditions: $conditions,
+                        sortField: $sortField,
+                        sortDirection: $sortDirection,
+                        filterLogic: $filterLogic,
+                        isPresented: $showFilter,
+                        db: db, table: table, connection: connection,
+                        onApply: { w, o in
+                            activeWhere = w; activeOrderBy = o
+                        })
     }
 
     private var maxPage: Int {
