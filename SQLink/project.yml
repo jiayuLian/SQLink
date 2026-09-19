@@ -31,6 +31,10 @@ targets:
       path: SQLink/Info.plist
       properties:
         UILaunchScreen: {}
+        # 声明 App 支持简体中文：否则系统自动生成的文案（actionSheet 的 Cancel、
+        # 搜索框的 Cancel、相册选择器按钮等）会回退成英文。
+        CFBundleLocalizations:
+          - zh-Hans
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jiayu.sqlink

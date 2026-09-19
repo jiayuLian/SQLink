@@ -39,7 +39,10 @@ struct DatabaseBrowserView: View {
                     .listStyle(.insetGrouped)
                     .navigationTitle(profile.name)
                     .navigationBarTitleDisplayMode(.inline)
-                    .searchable(text: $search, prompt: "搜索数据库")
+                    // displayMode: .always —— 搜索栏常驻可见。
+                    // 默认的 .automatic 会让搜索栏随滚动收起/展开，进页面时是收起的，
+                    // 必须先往下滑才露出来；这里改为始终显示。
+                    .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索数据库")
                 }
             }
         }
@@ -101,7 +104,7 @@ struct TableListView: View {
                 .listStyle(.insetGrouped)
                 .navigationTitle(db)
                 .navigationBarTitleDisplayMode(.inline)
-                .searchable(text: $search, prompt: "搜索表")
+                .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索表")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         if let onSwitchDB = onSwitchDB {

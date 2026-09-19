@@ -15,13 +15,10 @@ struct ProfileView: View {
     @State private var activating = false
     @State private var activationError: String?
 
-    // 账号操作：点账号名称弹出（修改密码 / 激活码开通会员 / 退出登录 / 注销账号）
-    // 无「取消」按钮：iOS 的 confirmationDialog 点弹窗外的空白（遮罩）即可关闭。
+    // 账号操作：点账号名称弹出（修改密码 / 激活码开通会员 / 退出登录 / 注销账号 / 取消）
+    // 「取消」必须显式提供：不给的话系统会自动补一个英文 Cancel（原因见下方 confirmationDialog 处注释）。
     @State private var showAccountMenu = false
     @State private var showDeleteConfirm = false
-    @State private var showDeleteError = false
-    @State private var deleting = false
-    @State private var deleteError: String?
 
     // 注销二次密码验证
     @State private var showDeletePassword = false
@@ -59,13 +56,9 @@ struct ProfileView: View {
                                 // 游客态（isLoggedIn 但无 token）不是真实账号，不显示会员标签，
                                 // 改为引导登录；未登录态同理在下方显示「未登录」。
                                 if settings.isPro {
-                                    Label("永久会员", systemImage: "checkmark.seal.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.accentColor)
+                                    memberTag("永久会员", icon: "checkmark.seal.fill", color: .accentColor)
                                 } else if !settings.authToken.isEmpty {
-                                    Label("免费用户", systemImage: "seal")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                                    memberTag("免费用户", icon: "seal", color: .secondary)
                                 } else {
                                     Text("点击登录 / 注册").font(.caption).foregroundColor(.secondary)
                                 }
@@ -140,7 +133,10 @@ struct ProfileView: View {
             // 点账号名称弹出的「账号操作」：进入本弹窗的前提是 authToken 非空
             // （游客态 / 未登录会走登录页），所以「修改密码」天然只在真实登录后可见，
             // 与后端 /api/auth/change-password 的 authMiddleware 要求一致。
-            // 不放「取消」：iOS 的 confirmationDialog 点弹窗外空白即关闭，系统已内置该行为。
+            // 「取消」必须显式写出来：confirmationDialog 底层是 UIAlertController(.actionSheet)，
+            // 若按钮列表里没有 role: .cancel，系统会自动补一个 —— 而补出来的文案取系统语言，
+            // 本 App 未声明本地化（Info.plist 缺 CFBundleLocalizations），实测补出来是英文「Cancel」。
+            // 显式提供后系统就不再自行添加；点弹窗外遮罩依然能关闭，两者不冲突。
             // 会员无需「激活码开通会员」，故已是会员时该项不显示。
             .confirmationDialog("账号操作", isPresented: $showAccountMenu, titleVisibility: .visible) {
                 Button("修改密码") { showChangePassword = true }
@@ -149,17 +145,13 @@ struct ProfileView: View {
                 }
                 Button("退出登录", role: .destructive) { confirmLogout = true }
                 Button("注销账号", role: .destructive) { showDeleteConfirm = true }
+                Button("取消", role: .cancel) {}
             }
             .alert("确认注销账号", isPresented: $showDeleteConfirm) {
                 Button("取消", role: .cancel) {}
                 Button("确认注销", role: .destructive) { showDeletePassword = true }
             } message: {
                 Text(deleteConfirmMessage)
-            }
-            .alert("注销失败", isPresented: $showDeleteError) {
-                Button("确定") {}
-            } message: {
-                Text(deleteError ?? "未知错误")
             }
             // 注销二次密码验证：确认弹窗通过后，要求重新输入登录密码，
             // 校验通过（即本人操作）才真正调用删除接口。符合主流 App 防误删做法。
@@ -212,23 +204,6 @@ struct ProfileView: View {
             } message: {
                 Text("退出后需重新登录，本机登录态将被清除（如不想被重装后自动恢复，请先退出再卸载）")
             }
-            .overlay {
-                if deleting {
-                    ZStack {
-                        Color.black.opacity(0.28).ignoresSafeArea()
-                        VStack(spacing: 12) {
-                            ProgressView()
-                            Text("正在注销账号…").font(.caption).foregroundColor(.white)
-                        }
-                        .padding(22)
-                        .background(Color(.secondarySystemBackground))
-                        .cornerRadius(14)
-                        .shadow(radius: 8)
-                    }
-                    .ignoresSafeArea()
-                }
-            }
-            .disabled(deleting)
             .sheet(isPresented: $showActivate) {
                 NavigationView {
                     VStack(spacing: 16) {
@@ -283,6 +258,18 @@ struct ProfileView: View {
         // 游客态显示「游客模式」，与「未登录」（无任何登录态）区分开
         if settings.guestMode { return "游客模式" }
         return settings.authEmail.isEmpty ? "未登录" : settings.authEmail
+    }
+
+    /// 会员状态标签：图标与文字紧贴。
+    /// 不用 `Label` —— `Label` 在 Form 行内的「图标—文字」间距由系统样式决定，实测偏大；
+    /// 改用 HStack 显式指定 4pt，视觉上更紧凑。
+    private func memberTag(_ title: String, icon: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+            Text(title)
+        }
+        .font(.caption)
+        .foregroundColor(color)
     }
 
     /// 注销确认弹窗文案：若当前为会员，明确提示将失去会员权益且不予退还。
