@@ -111,7 +111,7 @@ private struct LoginForm: View {
             do {
                 let result = try await AuthService.shared.login(baseURL: settings.apiBaseURL, email: email, password: password)
                 await MainActor.run {
-                    settings.applyMembership(result.email, token: result.token, isPro: result.isPro)
+                    settings.applyMembership(result.email, token: result.token, isPro: result.isPro, avatar: result.avatar)
                     loading = false
                     onLoggedIn()
                 }
@@ -227,7 +227,7 @@ private struct RegisterForm: View {
             do {
                 let result = try await AuthService.shared.register(baseURL: settings.apiBaseURL, email: email, code: code, password: password)
                 await MainActor.run {
-                    settings.applyMembership(result.email, token: result.token, isPro: result.isPro)
+                    settings.applyMembership(result.email, token: result.token, isPro: result.isPro, avatar: result.avatar)
                     loading = false
                     onRegistered()
                 }

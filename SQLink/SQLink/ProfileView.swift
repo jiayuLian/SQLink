@@ -469,15 +469,12 @@ struct AboutView: View {
     }
 }
 
-/// 「修改密码」（已登录态）：向当前账号邮箱发送验证码 → 验证码校验通过后重置为新密码。
+/// 「修改密码」（已登录态）：输入当前密码校验身份 → 重置为新密码。
 ///
-/// 为什么走邮箱验证码：后端（sqlink-api）**没有**已登录态的改密码接口
-/// （`POST /api/auth/change-password` 实测 404），只有
-/// `POST /api/auth/forgot-password/code` + `POST /api/auth/reset-password` 这一对
-/// 「邮箱验证码重置」接口；而本系统的身份根凭证本就是邮箱——未登录时走"找回密码"
-/// 同样只凭邮箱验证码就能改密，因此"已登录再额外校验旧密码"并不提升实际安全性。
-/// 故此处直接复用这两个接口：纯客户端实现，无需后端改动。
-/// 邮箱取当前登录账号（settings.authEmail），用户无需重复输入。
+/// 为什么不再走邮箱验证码：后端已补齐 `POST /api/auth/change-password`，要求
+/// Bearer token + 当前密码 —— 「只有登录成功之后才可以修改密码」由**服务端强制**，客户端绕不过去。
+/// 邮箱验证码那条路仍保留在登录页的「找回密码」里（未登录 / 忘记密码时使用）。
+/// 另外后端会让改密码之前签发的所有 token 立即失效，所以改完必须重新登录。
 private struct ChangePasswordView: View {
     @EnvironmentObject var settings: AppSettings
     /// 取消：仅关闭弹窗，不动登录态。
@@ -485,26 +482,19 @@ private struct ChangePasswordView: View {
     /// 修改成功：关闭弹窗并强制重新登录。
     let onDone: () -> Void
 
-    @State private var code = ""
+    @State private var oldPassword = ""
     @State private var password = ""
     @State private var confirm = ""
     @State private var showPwd = false
-    @State private var sending = false
     @State private var loading = false
     @State private var error: String?
-    @State private var countdown = 0
-    /// 后端未配置 SMTP 时会直接把验证码回传（与注册/找回密码页一致的开发兜底）。
-    @State private var devCode: String?
-    @State private var showCodeAlert = false
     @State private var showDone = false
-    /// 倒计时定时器：放进 @State 里，避免每次渲染都新建一个 Timer 发布者。
-    @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationView {
             VStack(spacing: 16) {
                 VStack(spacing: 6) {
-                    Text("为确认是本人操作，需向账号邮箱发送验证码。")
+                    Text("为确认是本人操作，请输入当前密码。")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -513,21 +503,14 @@ private struct ChangePasswordView: View {
                         .foregroundColor(.primary)
                 }
 
-                Button { sendCode() } label: {
-                    Text(sending ? "发送中…" : (countdown > 0 ? "\(countdown)s 后重发" : (devCode != nil ? "已获取" : "获取验证码")))
-                        .frame(maxWidth: .infinity)
+                HStack {
+                    PasswordField(text: $oldPassword, placeholder: "当前密码", showPassword: $showPwd)
+                        .frame(height: 44)
+                    Button { showPwd.toggle() } label: {
+                        Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
+                            .foregroundColor(.secondary)
+                    }
                 }
-                .buttonStyle(.bordered)
-                .disabled(sending || settings.authEmail.isEmpty || countdown > 0)
-                .onReceive(ticker) { _ in
-                    if countdown > 0 { countdown -= 1 }
-                }
-
-                TextField("验证码", text: $code)
-                    .keyboardType(.numberPad)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(height: 44)
-
                 HStack {
                     PasswordField(text: $password, placeholder: "新密码（至少 6 位）", showPassword: $showPwd)
                         .frame(height: 44)
@@ -561,7 +544,12 @@ private struct ChangePasswordView: View {
                     .padding(.vertical, 8)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(loading || code.isEmpty || password.count < 6 || confirm.isEmpty)
+                .disabled(loading || oldPassword.isEmpty || password.count < 6 || confirm.isEmpty)
+
+                Text("忘记当前密码？请退出登录后，在登录页使用「找回密码」（邮箱验证码）。")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
 
                 Spacer()
             }
@@ -574,11 +562,6 @@ private struct ChangePasswordView: View {
                 }
             }
         }
-        .alert("测试验证码", isPresented: $showCodeAlert) {
-            Button("确定") {}
-        } message: {
-            Text("后端未配置 SMTP，本次验证码为：\(devCode ?? "")")
-        }
         .alert("修改成功", isPresented: $showDone) {
             Button("重新登录") { onDone() }
         } message: {
@@ -586,35 +569,20 @@ private struct ChangePasswordView: View {
         }
     }
 
-    private func sendCode() {
-        sending = true; error = nil; devCode = nil
-        let email = settings.authEmail
-        Task {
-            do {
-                let dev = try await AuthService.shared.sendResetCode(baseURL: settings.apiBaseURL, email: email)
-                await MainActor.run {
-                    sending = false
-                    countdown = 60
-                    if let c = dev {
-                        devCode = c
-                        showCodeAlert = true
-                    }
-                }
-            } catch {
-                await MainActor.run { self.error = error.localizedDescription; self.sending = false }
-            }
-        }
-    }
-
     private func submit() {
-        guard password == confirm else { error = "两次输入的密码不一致"; return }
+        guard password == confirm else { error = "两次输入的新密码不一致"; return }
         guard password.count >= 6 else { error = "新密码至少 6 位"; return }
+        guard password != oldPassword else { error = "新密码不能与当前密码相同"; return }
+        // 兜底：无 token 时不该出现这个入口，但仍防御一下，避免发出必然 401 的请求把游客态也清掉。
+        guard !settings.authToken.isEmpty else { error = "登录态已失效，请重新登录后再试"; return }
         loading = true; error = nil
-        let email = settings.authEmail
         Task {
             do {
-                try await AuthService.shared.resetPassword(
-                    baseURL: settings.apiBaseURL, email: email, code: code, password: password
+                try await AuthService.shared.changePassword(
+                    baseURL: settings.apiBaseURL,
+                    token: settings.authToken,
+                    oldPassword: oldPassword,
+                    newPassword: password
                 )
                 await MainActor.run { loading = false; showDone = true }
             } catch {

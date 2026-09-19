@@ -278,11 +278,15 @@ final class AppSettings: ObservableObject {
         isPro = false
     }
 
-    func applyMembership(_ email: String, token: String, isPro: Bool) {
+    /// avatar：登录 / 注册响应里带回的头像 URL（以服务端为准）。
+    /// 重装后本地 UserDefaults 会被清空，头像只能靠它恢复；为空时不覆盖本地已有值，
+    /// 这样即便后端是旧版本（登录响应没带 avatar）也不会把已缓存的头像抹掉。
+    func applyMembership(_ email: String, token: String, isPro: Bool, avatar: String = "") {
         self.authEmail = email
         self.authToken = token
         self.guestMode = false
         self.isPro = isPro
+        if !avatar.isEmpty { self.avatarURL = avatar }
         // 登录/注册成功后固化凭据：登录态与会员态均存【本地】Keychain（见 persistCredentials）。
         persistCredentials()
     }
@@ -329,6 +333,23 @@ final class AppSettings: ObservableObject {
             await MainActor.run { self.plan = p }
         } catch {
             print("刷新公共配置失败：\(error.localizedDescription)")
+        }
+    }
+
+    /// 冷启动 / 恢复登录态后，从服务端补齐本地缺失的头像。
+    /// 场景：本次修复之前登录过的用户（Keychain 里有 token、但 UserDefaults 里的头像 URL 为空），
+    /// 或重装后仅恢复了登录态的情形——服务端 sqlink_users.avatar 仍有记录，拉回来即可显示。
+    /// 仅当「已登录（有 token）且本地头像为空」时才发请求；失败静默处理，绝不影响任何功能。
+    func syncAvatarFromServer() async {
+        guard !authToken.isEmpty, avatarURL.isEmpty else { return }
+        do {
+            let info = try await AuthService.shared.fetchMembership(baseURL: apiBaseURL, token: authToken)
+            if let a = info.avatar, !a.isEmpty {
+                await MainActor.run { self.avatarURL = a }
+            }
+        } catch {
+            // 后端未部署该接口（404）或网络异常时忽略：头像缺失不影响其它功能。
+            print("同步头像失败：\(error.localizedDescription)")
         }
     }
 }

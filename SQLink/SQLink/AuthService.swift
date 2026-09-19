@@ -26,11 +26,22 @@ struct AuthTokenData: Decodable {
     let email: String?
     let isPro: Bool?
     let code: String?
+    /// 登录 / 注册响应里的头像 URL（后端 app.js 的 login 返回 `avatar: user.avatar || ''`）。
+    /// 此前这里漏了解码，导致「重装后登录成功却拿不到头像」——服务端明明给了，客户端把它丢了。
+    let avatar: String?
 }
 
 /// 激活码兑换返回：仅需会员判定结果（会员为本地永久判定，无到期时间 / 类型 / 过期等冗余字段）。
 struct MembershipData: Decodable {
     let isPro: Bool
+}
+
+/// GET /api/user/membership 返回的用户资料（需登录）。
+/// 仅用于补齐本地缺失的头像 —— 会员状态仍按「本地永久判定」处理，不用它的 isPro 覆盖本地值。
+struct MembershipInfoData: Decodable {
+    let email: String?
+    let avatar: String?
+    let nickname: String?
 }
 
 struct AvatarData: Decodable {
@@ -97,20 +108,20 @@ final class AuthService {
         return nil
     }
 
-    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, isPro: Bool) {
+    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, isPro: Bool, avatar: String) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/register", body: ["email": email, "code": code, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.isPro ?? false)
+        return (token, email, d.isPro ?? false, d.avatar ?? "")
     }
 
-    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, isPro: Bool) {
+    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, isPro: Bool, avatar: String) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/login", body: ["email": email, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.isPro ?? false)
+        return (token, email, d.isPro ?? false, d.avatar ?? "")
     }
 
     func sendResetCode(baseURL: String, email: String) async throws -> String? {
@@ -124,6 +135,27 @@ final class AuthService {
 
     func resetPassword(baseURL: String, email: String, code: String, password: String) async throws {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/reset-password", body: ["email": email, "code": code, "password": password])
+        if resp.code != 200 { throw AuthError.message(resp.message) }
+    }
+
+    /// 拉取当前登录账号的资料（需登录）。用于重装 / 冷启动后补齐本地缺失的头像 URL。
+    func fetchMembership(baseURL: String, token: String) async throws -> MembershipInfoData {
+        let resp: APIResponse<MembershipInfoData> = try await request(baseURL: baseURL, path: "/api/user/membership", token: token)
+        guard resp.code == 200, let d = resp.data else { throw AuthError.message(resp.message) }
+        return d
+    }
+
+    /// 修改密码（需登录）：先校验当前密码，通过后重置为新密码。
+    /// 后端对应 POST /api/auth/change-password，要求 Bearer token + 旧密码 ——
+    /// 「只有登录成功之后才可以修改密码」由服务端强制，客户端无法绕过。
+    /// 修改成功后服务端会让所有旧 token 立即失效，因此必须重新登录。
+    func changePassword(baseURL: String, token: String, oldPassword: String, newPassword: String) async throws {
+        let resp: APIResponse<EmptyData> = try await request(
+            baseURL: baseURL,
+            path: "/api/auth/change-password",
+            token: token,
+            body: ["oldPassword": oldPassword, "newPassword": newPassword]
+        )
         if resp.code != 200 { throw AuthError.message(resp.message) }
     }
 

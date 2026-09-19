@@ -25,5 +25,7 @@ struct SQLinkApp: App {
 
     private func refreshConfigIfNeeded() async {
         await settings.refreshConfig()
+        // 冷启动补齐头像：本地为空（重装 / 老用户）时从服务端拉一次。
+        await settings.syncAvatarFromServer()
     }
 }
