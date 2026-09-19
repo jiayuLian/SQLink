@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// 「我的」页面：账号、外观、反馈与帮助、关于。
-/// 登录态非强制：未登录时仅显示登录入口；点击头像/账号可跳转登录或选择头像。
+/// 「我的」页面：账号、外观、关于。
+/// 交互：点头像 = 更换头像；点账号名称 = 弹出「账号操作」（修改密码 / 激活码开通会员 / 退出登录 / 注销账号）。
+/// 登录态非强制：未登录或游客态（无 token）点击上述两处一律先引导登录，不发必然 401 的请求。
 struct ProfileView: View {
     @EnvironmentObject var settings: AppSettings
     @State private var showLogin = false
@@ -14,7 +15,8 @@ struct ProfileView: View {
     @State private var activating = false
     @State private var activationError: String?
 
-    // 账号操作：点击账号区弹出（更换头像 / 退出登录 / 注销账号）
+    // 账号操作：点账号名称弹出（修改密码 / 激活码开通会员 / 退出登录 / 注销账号）
+    // 无「取消」按钮：iOS 的 confirmationDialog 点弹窗外的空白（遮罩）即可关闭。
     @State private var showAccountMenu = false
     @State private var showDeleteConfirm = false
     @State private var showDeleteError = false
@@ -37,63 +39,64 @@ struct ProfileView: View {
                 // 1. 账号（置顶）
                 Section("账号") {
                     HStack(spacing: 14) {
+                        // 头像：点击直接进入更换头像。
+                        // 点击区收窄为圆形（contentShape(Circle())），四个角不响应。
                         AvatarView(urlString: settings.avatarURL, size: 56)
                             .frame(width: 56, height: 56)
                             .clipShape(Circle())
+                            .contentShape(Circle())
+                            .onTapGesture { tapAvatar() }
+
+                        // 账号名称区：点这里才弹出「账号操作」菜单。
                         VStack(alignment: .leading, spacing: 4) {
                             if settings.isLoggedIn {
                                 Text(displayName)
                                     .font(.subheadline)
                                     .lineLimit(1)
+                                // 会员状态只显示这一处（图标在文字前）：
+                                //   已登录 + 已开通 → 永久会员
+                                //   已登录 + 未开通 → 免费用户
+                                // 游客态（isLoggedIn 但无 token）不是真实账号，不显示会员标签，
+                                // 改为引导登录；未登录态同理在下方显示「未登录」。
                                 if settings.isPro {
-                                    Text("永久会员").font(.caption).foregroundColor(.accentColor)
+                                    Label("永久会员", systemImage: "checkmark.seal.fill")
+                                        .font(.caption)
+                                        .foregroundColor(.accentColor)
+                                } else if !settings.authToken.isEmpty {
+                                    Label("免费用户", systemImage: "seal")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
                                 } else {
-                                    Text("免费版").font(.caption).foregroundColor(.secondary)
+                                    Text("点击登录 / 注册").font(.caption).foregroundColor(.secondary)
                                 }
                             } else {
                                 Text("未登录").font(.subheadline)
                                 Text("点击登录 / 注册").font(.caption).foregroundColor(.secondary)
                             }
                         }
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        // 游客态（isLoggedIn 为 true 但没有 token）不进入账号菜单：
-                        // 更换头像 / 注销等请求会带空 token → 401 → 连游客态一起被清掉。
-                        if settings.authToken.isEmpty { showLogin = true }
-                        else { showAccountMenu = true }
+                        // 撑满剩余宽度 + 上下各 6pt，保证点击区不小于 44pt 的可用高度
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                        .onTapGesture { tapAccount() }
                     }
 
+                    // 头像下方的会员状态行已删除：会员/免费只显示在头像右侧一处，
+                    // 避免同一个状态在同一个 Section 里出现两遍。
+                    // 「修改密码」「激活码开通会员」等操作统一收进「账号操作」弹窗（点账号名称弹出）。
                     if settings.isLoggedIn {
-                        if let err = avatarError {
-                            Text(err).font(.caption).foregroundColor(.red)
-                        }
-                        // 会员区：会员显示永久会员标识（状态为本地判定，无需刷新）。
-                        // 激活码与账号绑定，必须真实登录后才能使用；游客态只提示先登录。
-                        if settings.isPro {
-                            Label("永久会员", systemImage: "checkmark.seal.fill")
-                                .foregroundColor(.accentColor)
-                        } else if !settings.authToken.isEmpty {
-                            Button { showActivate = true } label: {
-                                Label("激活码开通会员", systemImage: "key.fill")
+                        // 上传中给个反馈：点头像会直接进相册，选完图若不提示会以为没反应
+                        if uploading {
+                            HStack(spacing: 6) {
+                                ProgressView().scaleEffect(0.7)
+                                Text("正在上传头像…").font(.caption).foregroundColor(.secondary)
                             }
-                        } else {
-                            Text("激活码与账号绑定，请先登录后使用")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                        } else if let err = avatarError {
+                            Text(err).font(.caption).foregroundColor(.red)
                         }
                     } else {
                         Button { showLogin = true } label: {
                             Label("登录 / 注册", systemImage: "person.crop.circle.badge.plus")
-                        }
-                    }
-
-                    // 修改密码：仅真实登录（持 token）时可用。
-                    // 游客态没有账号，改密码请求会带空 token → 401 → 连游客态一起被清掉。
-                    if !settings.authToken.isEmpty {
-                        Button { showChangePassword = true } label: {
-                            Label("修改密码", systemImage: "lock.rotation")
                         }
                     }
                 }
@@ -134,11 +137,18 @@ struct ProfileView: View {
                     uploadAvatar(image)
                 }
             }
+            // 点账号名称弹出的「账号操作」：进入本弹窗的前提是 authToken 非空
+            // （游客态 / 未登录会走登录页），所以「修改密码」天然只在真实登录后可见，
+            // 与后端 /api/auth/change-password 的 authMiddleware 要求一致。
+            // 不放「取消」：iOS 的 confirmationDialog 点弹窗外空白即关闭，系统已内置该行为。
+            // 会员无需「激活码开通会员」，故已是会员时该项不显示。
             .confirmationDialog("账号操作", isPresented: $showAccountMenu, titleVisibility: .visible) {
-                Button("更换头像") { showImagePicker = true }
+                Button("修改密码") { showChangePassword = true }
+                if !settings.isPro {
+                    Button("激活码开通会员") { showActivate = true }
+                }
                 Button("退出登录", role: .destructive) { confirmLogout = true }
                 Button("注销账号", role: .destructive) { showDeleteConfirm = true }
-                Button("取消", role: .cancel) {}
             }
             .alert("确认注销账号", isPresented: $showDeleteConfirm) {
                 Button("取消", role: .cancel) {}
@@ -252,6 +262,21 @@ struct ProfileView: View {
                 }
             }
         }
+    }
+
+    /// 点头像 = 更换头像。
+    /// 未登录 / 游客态（无 token）没有云端头像可换，且请求必带空 token → 401 会把游客态一起清掉，
+    /// 所以统一先引导登录。
+    private func tapAvatar() {
+        if settings.authToken.isEmpty { showLogin = true }
+        else { showImagePicker = true }
+    }
+
+    /// 点账号名称 = 弹出「账号操作」菜单（修改密码 / 激活码开通会员 / 退出登录 / 注销账号）。
+    /// 同样地，无 token 时不进菜单，避免菜单里的请求触发 401 把游客态一起清掉。
+    private func tapAccount() {
+        if settings.authToken.isEmpty { showLogin = true }
+        else { showAccountMenu = true }
     }
 
     private var displayName: String {
@@ -471,8 +496,12 @@ struct AboutView: View {
 
 /// 「修改密码」（已登录态）：输入当前密码校验身份 → 重置为新密码。
 ///
+/// 入口在「我的」→ 点账号名称 → 「账号操作」弹窗里的「修改密码」，
+/// 该弹窗只在 authToken 非空时才会出现（游客态 / 未登录点账号名称直接进登录页），
+/// 即「只有登录成功之后才可以修改密码」在 UI 层与后端 authMiddleware 双重保证。
+///
 /// 为什么不再走邮箱验证码：后端已补齐 `POST /api/auth/change-password`，要求
-/// Bearer token + 当前密码 —— 「只有登录成功之后才可以修改密码」由**服务端强制**，客户端绕不过去。
+/// Bearer token + 当前密码 —— 服务端强制，客户端绕不过去。
 /// 邮箱验证码那条路仍保留在登录页的「找回密码」里（未登录 / 忘记密码时使用）。
 /// 另外后端会让改密码之前签发的所有 token 立即失效，所以改完必须重新登录。
 private struct ChangePasswordView: View {
