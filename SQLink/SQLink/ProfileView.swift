@@ -28,6 +28,9 @@ struct ProfileView: View {
     @State private var reauthing = false
     @State private var reauthError: String?
 
+    // 修改密码（仅已登录态）：邮箱验证码校验 → 重置为新密码 → 强制重新登录
+    @State private var showChangePassword = false
+
     var body: some View {
         NavigationView {
             Form {
@@ -85,6 +88,14 @@ struct ProfileView: View {
                             Label("登录 / 注册", systemImage: "person.crop.circle.badge.plus")
                         }
                     }
+
+                    // 修改密码：仅真实登录（持 token）时可用。
+                    // 游客态没有账号，改密码请求会带空 token → 401 → 连游客态一起被清掉。
+                    if !settings.authToken.isEmpty {
+                        Button { showChangePassword = true } label: {
+                            Label("修改密码", systemImage: "lock.rotation")
+                        }
+                    }
                 }
 
                 // 2. 外观（第二）
@@ -107,6 +118,17 @@ struct ProfileView: View {
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showLogin) { AuthView(onDismiss: { showLogin = false }) }
+            // 修改密码：走邮箱验证码（复用后端 forgot-password/code + reset-password）。
+            // 取消只关弹窗；改成功才登出（强制用新密码重新登录）。
+            .sheet(isPresented: $showChangePassword) {
+                ChangePasswordView(
+                    onCancel: { showChangePassword = false },
+                    onDone: {
+                        showChangePassword = false
+                        settings.logout()
+                    }
+                )
+            }
             .sheet(isPresented: $showImagePicker) {
                 ImagePicker(sourceType: .photoLibrary) { image in
                     uploadAvatar(image)
@@ -443,6 +465,161 @@ struct AboutView: View {
             Button("确定") {}
         } message: {
             Text("微信号 \(authorWeChat) 已复制，添加时请备注你的注册邮箱，便于核对问题")
+        }
+    }
+}
+
+/// 「修改密码」（已登录态）：向当前账号邮箱发送验证码 → 验证码校验通过后重置为新密码。
+///
+/// 为什么走邮箱验证码：后端（sqlink-api）**没有**已登录态的改密码接口
+/// （`POST /api/auth/change-password` 实测 404），只有
+/// `POST /api/auth/forgot-password/code` + `POST /api/auth/reset-password` 这一对
+/// 「邮箱验证码重置」接口；而本系统的身份根凭证本就是邮箱——未登录时走"找回密码"
+/// 同样只凭邮箱验证码就能改密，因此"已登录再额外校验旧密码"并不提升实际安全性。
+/// 故此处直接复用这两个接口：纯客户端实现，无需后端改动。
+/// 邮箱取当前登录账号（settings.authEmail），用户无需重复输入。
+private struct ChangePasswordView: View {
+    @EnvironmentObject var settings: AppSettings
+    /// 取消：仅关闭弹窗，不动登录态。
+    let onCancel: () -> Void
+    /// 修改成功：关闭弹窗并强制重新登录。
+    let onDone: () -> Void
+
+    @State private var code = ""
+    @State private var password = ""
+    @State private var confirm = ""
+    @State private var showPwd = false
+    @State private var sending = false
+    @State private var loading = false
+    @State private var error: String?
+    @State private var countdown = 0
+    /// 后端未配置 SMTP 时会直接把验证码回传（与注册/找回密码页一致的开发兜底）。
+    @State private var devCode: String?
+    @State private var showCodeAlert = false
+    @State private var showDone = false
+    /// 倒计时定时器：放进 @State 里，避免每次渲染都新建一个 Timer 发布者。
+    @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 16) {
+                VStack(spacing: 6) {
+                    Text("为确认是本人操作，需向账号邮箱发送验证码。")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    Text(settings.authEmail)
+                        .font(.footnote)
+                        .foregroundColor(.primary)
+                }
+
+                Button { sendCode() } label: {
+                    Text(sending ? "发送中…" : (countdown > 0 ? "\(countdown)s 后重发" : (devCode != nil ? "已获取" : "获取验证码")))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(sending || settings.authEmail.isEmpty || countdown > 0)
+                .onReceive(ticker) { _ in
+                    if countdown > 0 { countdown -= 1 }
+                }
+
+                TextField("验证码", text: $code)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(height: 44)
+
+                HStack {
+                    PasswordField(text: $password, placeholder: "新密码（至少 6 位）", showPassword: $showPwd)
+                        .frame(height: 44)
+                    Button { showPwd.toggle() } label: {
+                        Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                HStack {
+                    PasswordField(text: $confirm, placeholder: "确认新密码", showPassword: $showPwd)
+                        .frame(height: 44)
+                    Button { showPwd.toggle() } label: {
+                        Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if let error = error {
+                    Text(error)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                }
+
+                Button { submit() } label: {
+                    HStack {
+                        if loading { ProgressView().scaleEffect(0.8) }
+                        Text("确认修改")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(loading || code.isEmpty || password.count < 6 || confirm.isEmpty)
+
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("修改密码")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("取消") { onCancel() }
+                }
+            }
+        }
+        .alert("测试验证码", isPresented: $showCodeAlert) {
+            Button("确定") {}
+        } message: {
+            Text("后端未配置 SMTP，本次验证码为：\(devCode ?? "")")
+        }
+        .alert("修改成功", isPresented: $showDone) {
+            Button("重新登录") { onDone() }
+        } message: {
+            Text("密码已更新，请使用新密码重新登录。")
+        }
+    }
+
+    private func sendCode() {
+        sending = true; error = nil; devCode = nil
+        let email = settings.authEmail
+        Task {
+            do {
+                let dev = try await AuthService.shared.sendResetCode(baseURL: settings.apiBaseURL, email: email)
+                await MainActor.run {
+                    sending = false
+                    countdown = 60
+                    if let c = dev {
+                        devCode = c
+                        showCodeAlert = true
+                    }
+                }
+            } catch {
+                await MainActor.run { self.error = error.localizedDescription; self.sending = false }
+            }
+        }
+    }
+
+    private func submit() {
+        guard password == confirm else { error = "两次输入的密码不一致"; return }
+        guard password.count >= 6 else { error = "新密码至少 6 位"; return }
+        loading = true; error = nil
+        let email = settings.authEmail
+        Task {
+            do {
+                try await AuthService.shared.resetPassword(
+                    baseURL: settings.apiBaseURL, email: email, code: code, password: password
+                )
+                await MainActor.run { loading = false; showDone = true }
+            } catch {
+                await MainActor.run { self.error = error.localizedDescription; self.loading = false }
+            }
         }
     }
 }
