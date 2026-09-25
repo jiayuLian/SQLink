@@ -93,16 +93,6 @@ enum KeychainHelper {
         return String(data: data, encoding: .utf8)
     }
 
-    static func deleteLogin(_ key: String) {
-        let account = key
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: loginService,
-            kSecAttrAccount as String: account
-        ]
-        SecItemDelete(query as CFDictionary)
-    }
-
     static func clearLogin() {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

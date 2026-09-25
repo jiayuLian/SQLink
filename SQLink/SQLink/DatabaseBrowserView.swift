@@ -31,18 +31,17 @@ struct DatabaseBrowserView: View {
                 if let db = selectedDB {
                     TableListView(profile: profile, db: db, connection: conn, onSwitchDB: { selectedDB = nil })
                 } else {
-                    List {
-                        ForEach(filtered, id: \.self) { db in
-                            NavigationLink(db, destination: TableListView(profile: profile, db: db, connection: conn))
+                    // 搜索框常驻 + 卡片自绘（原因见 Components.swift 的 CardListMetrics 注释）
+                    SearchableCardList(search: $search, placeholder: "搜索数据库",
+                                       isEmpty: filtered.isEmpty, emptyText: "没有匹配的数据库") {
+                        ForEach(filtered.indices, id: \.self) { i in
+                            CardRow(title: filtered[i],
+                                    destination: TableListView(profile: profile, db: filtered[i], connection: conn))
+                            if i != filtered.count - 1 { CardRowDivider() }
                         }
                     }
-                    .listStyle(.insetGrouped)
                     .navigationTitle(profile.name)
                     .navigationBarTitleDisplayMode(.inline)
-                    // displayMode: .always —— 搜索栏常驻可见。
-                    // 默认的 .automatic 会让搜索栏随滚动收起/展开，进页面时是收起的，
-                    // 必须先往下滑才露出来；这里改为始终显示。
-                    .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索数据库")
                 }
             }
         }
@@ -93,18 +92,18 @@ struct TableListView: View {
             } else if let error = error {
                 Text(error).foregroundColor(.red).padding()
             } else {
-                List {
-                    ForEach(0..<filtered.count, id: \.self) { i in
+                // 表用 table 图标、视图用 eye 图标；行高与内边距由 CardRow 统一控制
+                SearchableCardList(search: $search, placeholder: "搜索表",
+                                   isEmpty: filtered.isEmpty, emptyText: "没有匹配的表") {
+                    ForEach(filtered.indices, id: \.self) { i in
                         let t = filtered[i]
-                        NavigationLink(destination: TableDetailView(connection: connection, db: db, table: t.name)) {
-                            Label(t.name, systemImage: t.type == "VIEW" ? "eye" : "table")
-                        }
+                        CardRow(icon: t.type == "VIEW" ? "eye" : "table", title: t.name,
+                                destination: TableDetailView(connection: connection, db: db, table: t.name))
+                        if i != filtered.count - 1 { CardRowDivider() }
                     }
                 }
-                .listStyle(.insetGrouped)
                 .navigationTitle(db)
                 .navigationBarTitleDisplayMode(.inline)
-                .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索表")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         if let onSwitchDB = onSwitchDB {

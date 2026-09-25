@@ -193,18 +193,4 @@ extension ExportUtils {
         }
         top.present(vc, animated: true)
     }
-
-    /// 直接弹出系统分享面板，分享一个链接（如 App 下载地址）。
-    /// 若设备已安装微信 / QQ，系统分享面板会列出它们，用户可一键分享到微信、朋友圈、QQ。
-    static func shareLink(_ urlString: String) {
-        guard let url = URL(string: urlString) else { return }
-        let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        guard let top = UIApplication.shared.topViewController() else { return }
-        if let popover = vc.popoverPresentationController {
-            popover.sourceView = top.view
-            popover.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY, width: 0, height: 0)
-            popover.permittedArrowDirections = []
-        }
-        top.present(vc, animated: true)
-    }
 }

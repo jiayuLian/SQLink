@@ -347,3 +347,165 @@ private struct EditTarget: Identifiable {
     let ri: Int
     let ci: Int
 }
+
+// MARK: - 分组卡片列表（数据表 / 数据库列表共用）
+//
+// 为什么不用 List(.insetGrouped)：它的首段顶部会额外留出约 51pt 空白
+// （分组样式自身的段上边距 + 搜索栏挂在导航栏抽屉里时占掉的高度），
+// 而 SwiftUI 在 iOS 15 上没有 API 能把这段间距调小（.listSectionSpacing / .contentMargins
+// 都要 iOS 17）。改成自绘卡片后，搜索栏与卡片之间的距离完全由下面的常量决定。
+//
+// 几何取值来自真机截图逐像素测量（iPhone 13/14，1170×2532 @3x）：
+//   卡片左右内缩 16pt、圆角 10pt、行高 49pt、行内左右内边距 16pt、
+//   图标槽宽 30pt（图标—文字间距 12pt）、分隔线左侧内缩 16pt。
+
+/// 分组卡片的统一几何参数。改这里即可整体调整两个列表页的观感。
+enum CardListMetrics {
+    /// 卡片距屏幕左右
+    static let cardInset: CGFloat = 16
+    /// 卡片圆角
+    static let corner: CGFloat = 10
+    /// 行内左右内边距
+    static let rowPadding: CGFloat = 16
+    /// 图标槽宽（图标居中于槽内，实测图标墨迹距卡片左缘约 20pt）
+    static let iconSlot: CGFloat = 30
+    /// 图标与文字间距
+    static let iconGap: CGFloat = 12
+    /// 行高
+    static let rowHeight: CGFloat = 49
+    /// 分隔线左侧内缩（相对卡片左缘）
+    static let separatorLeading: CGFloat = 16
+    /// 搜索框下方的留白
+    static let searchBottomGap: CGFloat = 8
+    /// 卡片上方的留白（与上一项相加 = 搜索框到卡片的实际间距 18pt，改前约 51pt）
+    static let cardTopGap: CGFloat = 10
+}
+
+/// 常驻搜索框（自绘）：固定显示在列表上方，不随滚动收起，也不靠导航栏抽屉。
+///
+/// 外观对齐系统搜索框：高 36pt、圆角 10pt、底色 systemGray5、左侧放大镜、非空时右侧清除按钮。
+struct SearchField: View {
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 15))
+                .foregroundColor(Color(.secondaryLabel))
+            TextField(placeholder, text: $text)
+                .font(.body)
+                .foregroundColor(.primary)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(Color(.tertiaryLabel))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 36)
+        .background(Color(.systemGray5))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// 把若干行合成一张白色圆角卡片。
+/// 用 secondarySystemGroupedBackground：浅色下为白色、深色下为分组内容色，与页面底色区分得开。
+struct CardList<Content: View>: View {
+    var topSpacing: CGFloat = CardListMetrics.cardTopGap
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 0) { content() }
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: CardListMetrics.corner, style: .continuous))
+            .padding(.top, topSpacing)
+            .padding(.horizontal, CardListMetrics.cardInset)
+    }
+}
+
+/// 行与行之间的分隔线（左侧内缩，与系统分组列表一致）。
+struct CardRowDivider: View {
+    var body: some View {
+        Divider().padding(.leading, CardListMetrics.separatorLeading)
+    }
+}
+
+/// 行按压反馈：按下时整行变浅灰，替代 List 自带的高亮。
+struct CardRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        let bg: Color = configuration.isPressed
+            ? Color(.systemGray4)
+            : Color(.secondarySystemGroupedBackground)
+        return configuration.label
+            .background(bg)
+            .contentShape(Rectangle())
+    }
+}
+
+/// 卡片中的一行：可选图标 + 标题 + 右侧箭头。几何与系统 List 行一致。
+struct CardRow<Destination: View>: View {
+    var icon: String? = nil
+    let title: String
+    let destination: Destination
+
+    var body: some View {
+        NavigationLink(destination: destination) {
+            HStack(spacing: CardListMetrics.iconGap) {
+                if let icon = icon {
+                    Image(systemName: icon)
+                        .font(.body)
+                        .foregroundColor(.accentColor)
+                        .frame(width: CardListMetrics.iconSlot)
+                }
+                Text(title)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Color(.tertiaryLabel))
+            }
+            .padding(.horizontal, CardListMetrics.rowPadding)
+            .padding(.vertical, 13)
+            .frame(minHeight: CardListMetrics.rowHeight)
+        }
+        .buttonStyle(CardRowButtonStyle())
+    }
+}
+
+/// 「常驻搜索框 + 分组卡片」的组合容器：两个列表页（数据库 / 数据表）共用，保证间距一致。
+struct SearchableCardList<Content: View>: View {
+    @Binding var search: String
+    let placeholder: String
+    let isEmpty: Bool
+    let emptyText: String
+    @ViewBuilder var rows: () -> Content
+
+    var body: some View {
+        VStack(spacing: 0) {
+            SearchField(placeholder: placeholder, text: $search)
+                .padding(.horizontal, CardListMetrics.cardInset)
+                .padding(.top, 8)
+                .padding(.bottom, CardListMetrics.searchBottomGap)
+            ScrollView {
+                if isEmpty {
+                    Text(emptyText)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 20)
+                } else {
+                    CardList { rows() }
+                        .padding(.bottom, 24)
+                }
+            }
+        }
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+    }
+}

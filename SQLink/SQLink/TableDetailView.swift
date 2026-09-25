@@ -700,7 +700,6 @@ struct TableDataView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var page = 1
-    @State private var exportError: String?
 
     // 导出进度（引用类型，便于后台 Task 安全更新 UI）
     @StateObject private var exportState = ExportProgressModel()
