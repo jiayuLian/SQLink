@@ -254,6 +254,31 @@ struct QueryConsoleView: View {
     }
 
     var body: some View {
+        if settings.isPro {
+            consoleContent
+        } else {
+            memberLockedView
+        }
+    }
+
+    /// 会员锁定页：控制台仅会员可用。入口有多处，统一在此拦截，免费 / 未登录用户不进入控制台逻辑。
+    private var memberLockedView: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 40))
+                .foregroundColor(.secondary)
+            Text("查询控制台为会员功能").font(.headline)
+            Text("在「我的 → 账号操作 → 激活码开通会员」后可用")
+                .font(.footnote).foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("查询控制台")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var consoleContent: some View {
         VStack(spacing: 0) {
             // status / context bar
             HStack {
@@ -434,8 +459,6 @@ struct QueryConsoleView: View {
 
     private func exportAs(_ format: ExportFormat) {
         guard !columns.isEmpty else { return }
-        // 免费版限制导出行数；会员无限制。
-        let rowsToExport = settings.isPro ? rows : Array(rows.prefix(settings.plan.freeExportLimit))
         let names = columns.map { $0.name }
         let ts = ExportUtils.timestamp()
         let fileName: String
@@ -443,10 +466,10 @@ struct QueryConsoleView: View {
         switch format {
         case .csv:
             fileName = "query_result_\(ts).csv"
-            content = ExportUtils.buildCSV(columnNames: names, rows: rowsToExport)
+            content = ExportUtils.buildCSV(columnNames: names, rows: rows)
         case .sql:
             fileName = "query_result_\(ts).sql"
-            content = ExportUtils.buildSQL(insertInto: "query_result", columnNames: names, rows: rowsToExport)
+            content = ExportUtils.buildSQL(insertInto: "query_result", columnNames: names, rows: rows)
         }
         if let url = ExportUtils.writeTempFile(name: fileName, content: content) {
             ExportUtils.shareFile(url)
@@ -462,7 +485,7 @@ struct QueryConsoleView: View {
         ToolbarItem(placement: .navigationBarTrailing) {
             Button { history = QueryHistory.load(); showHistory = true } label: { Image(systemName: "clock") }
         }
-        // 导出：所有用户可用；免费版按免费额度限制行数，会员无限制。
+        // 导出：控制台仅会员可用，导出不限行数。
         ToolbarItem(placement: .navigationBarTrailing) {
             Menu {
                 Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
@@ -638,6 +661,11 @@ struct QueryConsoleView: View {
     // MARK: - Edit from result (single-table simple SELECT only)
 
     private func enterConsoleEdit() {
+        // 兜底：入口按钮已按会员状态隐藏，这里再挡一层（防止状态回滚 / 历史状态残留后仍能进编辑态）。
+        guard settings.isPro else {
+            editError = "数据编辑为会员功能，升级后可修改数据"
+            return
+        }
         editingRows = rows.map { $0.map { $0 } }
         hasChanges = false
         editMessage = nil; editError = nil
@@ -652,6 +680,11 @@ struct QueryConsoleView: View {
     }
 
     private func saveConsoleEdits() async {
+        // 兜底：会员状态在编辑期间失效（降级 / 登出）时不写库。
+        guard settings.isPro else {
+            await MainActor.run { editError = "数据编辑为会员功能，升级后可修改数据" }
+            return
+        }
         guard let pk = editPK, let pkIndex = editPKIndex else {
             await MainActor.run { editError = "未检测到主键或唯一键" }
             return
@@ -757,8 +790,8 @@ struct QueryConsoleView: View {
                 self.editColumns = editCols
                 self.editPK = pk
                 self.editPKIndex = editCols.firstIndex { $0.field == pk }
-                // 数据编辑：必须是会员，且查询须带 WHERE 条件（整表 SELECT 不可编辑）
-                self.canEdit = settings.isPro && sqlHasWhere
+                // 数据编辑：查询须带 WHERE 条件（整表 SELECT 不可编辑）
+                self.canEdit = sqlHasWhere
             }
         } catch {
             await MainActor.run { canEdit = false }

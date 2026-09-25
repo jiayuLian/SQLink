@@ -76,6 +76,7 @@ struct TableListView: View {
     let db: String
     let connection: MySQLConnection
     var onSwitchDB: (() -> Void)? = nil
+    @EnvironmentObject var settings: AppSettings
     @State private var tables: [(name: String, type: String)] = []
     @State private var loading = true
     @State private var error: String?
@@ -111,8 +112,15 @@ struct TableListView: View {
                         }
                     }
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        NavigationLink("查询") {
+                        NavigationLink {
                             QueryConsoleView(connection: connection, db: db, defaultTable: nil)
+                        } label: {
+                            HStack(spacing: 4) {
+                                if !settings.isPro {
+                                    Image(systemName: "lock.fill").font(.caption2)
+                                }
+                                Text("查询")
+                            }
                         }
                     }
                 }

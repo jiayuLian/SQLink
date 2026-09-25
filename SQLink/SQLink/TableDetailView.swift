@@ -225,6 +225,8 @@ struct TableDetailView: View {
     let db: String
     let table: String
 
+    @EnvironmentObject var settings: AppSettings
+
     @State private var columns: [ColumnInfo] = []
     @State private var loading = true
     @State private var error: String?
@@ -314,7 +316,18 @@ struct TableDetailView: View {
             }
 
             Section {
-                NavigationLink("打开查询控制台", destination: QueryConsoleView(connection: connection, db: db, defaultTable: table))
+                NavigationLink {
+                    QueryConsoleView(connection: connection, db: db, defaultTable: table)
+                } label: {
+                    HStack {
+                        Label("打开查询控制台", systemImage: "terminal")
+                        Spacer()
+                        if !settings.isPro {
+                            Label("会员", systemImage: "lock.fill")
+                                .font(.caption).foregroundColor(.orange)
+                        }
+                    }
+                }
             }
         }
         .navigationTitle(table)
@@ -769,7 +782,19 @@ struct TableDataView: View {
                     if isViewLimited {
                         HStack(spacing: 4) {
                             Image(systemName: "lock.fill").font(.caption2)
-                            Text("免费版最多查看 \(settings.plan.freeViewLimit) 条，共 \(rawCount) 条已隐藏，升级会员查看全部")
+                            Text("免费版最多查看 \(settings.plan.freeViewLimit) 条，另有 \(rawCount - settings.plan.freeViewLimit) 条已隐藏，升级会员查看全部")
+                                .font(.caption2)
+                        }
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 10).padding(.bottom, 4)
+                    }
+
+                    // 免费版数据编辑提示：出现条件与会员的「编辑」按钮一致（已应用筛选 / 排序）。
+                    // 会员在这里看到的是「编辑」按钮，免费用户看到这行说明，避免「功能凭空消失」。
+                    if !settings.isPro && hasFilterCondition {
+                        HStack(spacing: 4) {
+                            Image(systemName: "lock.fill").font(.caption2)
+                            Text("数据编辑为会员功能，升级后可修改数据")
                                 .font(.caption2)
                         }
                         .foregroundColor(.orange)
@@ -827,10 +852,10 @@ struct TableDataView: View {
                             // 编辑期间必须锁定翻页/改每页条数/改筛选，否则新页数据会与旧编辑值错位写库。
                             Text("编辑中已锁定翻页").font(.caption2).foregroundColor(.orange)
                         }
-                        Menu { ForEach([50, 100, 200, 500], id: \.self) { s in
+                        Menu { ForEach(pageSizeOptions, id: \.self) { s in
                             Button("\(s) 条/页") { settings.pageSize = s; page = 1 }
                         } } label: {
-                            Label("\(settings.pageSize) 条/页", systemImage: "line.3.horizontal")
+                            Label("\(effectivePageSize) 条/页", systemImage: "line.3.horizontal")
                                 .font(.caption)
                         }
                         .disabled(editMode)
@@ -866,9 +891,29 @@ struct TableDataView: View {
                         })
     }
 
+    /// 免费查看上限（会员无上限）。与后端 `freeViewLimit` 同步。
+    private var viewLimit: Int {
+        settings.isPro ? Int.max : max(1, settings.plan.freeViewLimit)
+    }
+    /// 免费 / 未登录用户分页档位：固定 50、100 两档（硬编码，不随后端 freeViewLimit 漂移）。
+    private static let freePageSizeOptions = [50, 100]
+    /// 免费用户每页条数硬上限 = 免费档位最大值（由档位推导，避免两处写死不同步）。
+    private static var freePageSizeCap: Int { freePageSizeOptions.max() ?? 100 }
+    /// 会员分页档位：不受免费额度限制。
+    private static let proPageSizeOptions = [50, 100, 200, 500]
+
+    /// 实际每页条数：免费用户固定上限 100（与可选档位一致），会员不受限。
+    /// 仍做一次兜底夹取，防止历史持久化值（如会员期选的 500）在会员到期后继续按 500 取数，绕开免费额度。
+    private var effectivePageSize: Int {
+        let base = max(1, settings.pageSize)
+        return settings.isPro ? base : min(base, Self.freePageSizeCap)
+    }
+    /// 「每页条数」菜单可选档位：免费 / 未登录用户只有 50、100 两档，会员不受限。
+    private var pageSizeOptions: [Int] {
+        settings.isPro ? Self.proPageSizeOptions : Self.freePageSizeOptions
+    }
     private var maxPage: Int {
-        let ps = max(1, settings.pageSize)
-        return max(1, Int(ceil(Double(rowCount ?? 0) / Double(ps))))
+        max(1, Int(ceil(Double(rowCount ?? 0) / Double(effectivePageSize))))
     }
     private var isViewLimited: Bool {
         !settings.isPro && rawCount > settings.plan.freeViewLimit
@@ -936,19 +981,22 @@ struct TableDataView: View {
     }
 
     private func fetchData() async throws {
-        let pageSize = max(1, settings.pageSize)
+        let pageSize = effectivePageSize
         // 先取真实总数，用于免费版浏览上限判断
         let raw = try await withReconnect(connection) { try await connection.countRows(db: db, table: table, whereClause: activeWhere) }
-        let viewLimit = settings.isPro ? Int.max : settings.plan.freeViewLimit
-        let displayTotal = min(raw, viewLimit)
+        let limit = viewLimit
+        let displayTotal = min(raw, limit)
         let computedMaxPage = max(1, Int(ceil(Double(displayTotal) / Double(pageSize))))
         let safePage = min(max(1, page), computedMaxPage)
         if safePage != page { await MainActor.run { page = safePage } }
         let offset = (safePage - 1) * pageSize
+        // 关键修复：实际拉取的行数同样按免费额度裁剪。
+        // 之前只裁了「总数 / 页数」，没有裁 fetch 的 limit —— 免费用户把每页设成 500 时一次就能取回 500 行。
+        let fetchLimit = max(0, min(pageSize, limit - offset))
 
         async let cols = withReconnect(connection) { try await connection.listColumns(db: db, table: table) }
         let c = try await cols
-        async let prev = withReconnect(connection) { try await connection.fetchRows(db: db, table: table, limit: pageSize, offset: offset,
+        async let prev = withReconnect(connection) { try await connection.fetchRows(db: db, table: table, limit: fetchLimit, offset: offset,
                                                  whereClause: activeWhere, orderBy: activeOrderBy) }
         let p = try await prev
         var pc = [ColumnDef](); var pr = [[String?]]()
@@ -995,6 +1043,12 @@ struct TableDataView: View {
     }
 
     private func enterEdit() {
+        // 兜底：入口按钮已按会员状态隐藏，这里再挡一层（防止状态回滚 / 历史状态残留后仍能进编辑态）。
+        guard settings.isPro else {
+            saveMessage = nil
+            saveError = "数据编辑为会员功能，升级后可修改数据"
+            return
+        }
         // 结果集列数必须与表结构列数一致（INVISIBLE 列、列级 SELECT 权限等都会导致不一致），
         // 否则保存时会按结构列索引去读结果行 → 越界或写错列。
         guard previewCols.count == columns.count, !previewRows.isEmpty else {
@@ -1016,6 +1070,11 @@ struct TableDataView: View {
     }
 
     private func saveEdits() async {
+        // 兜底：会员状态在编辑期间失效（降级 / 登出）时不写库。
+        guard settings.isPro else {
+            await MainActor.run { saveError = "数据编辑为会员功能，升级后可修改数据" }
+            return
+        }
         guard let pk = primaryKey else {
             await MainActor.run { saveError = "未检测到主键或唯一键" }
             return
