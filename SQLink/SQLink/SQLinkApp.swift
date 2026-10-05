@@ -21,7 +21,7 @@ struct SQLinkApp: App {
             .environmentObject(settings)
             .task { await handleLaunchSessionCheck() }
             .onChange(of: settings.isLoggedIn) { _ in
-                Task { await settings.refreshConfig() }
+                Task { await refreshConfigIfNeeded() }
             }
             // 回到前台时检测是否被其他设备挤下线（一号一用：第二台登录踢第一台）。
             // 锁屏 / 切后台后系统可能回收网络，此时戳一次后端即可感知 token 是否已失效。
@@ -38,7 +38,7 @@ struct SQLinkApp: App {
         }
     }
 
-    /// 冷启动：先校验会话（检测被踢 / 过期），再刷新公开配置。
+    /// 冷启动：先校验会话（检测被踢 / 过期），再刷新配置 + 补齐头像。
     private func handleLaunchSessionCheck() async {
         let kicked = await settings.validateSession()
         if kicked {
@@ -47,7 +47,7 @@ struct SQLinkApp: App {
                 showKickedAlert = true
             }
         }
-        await settings.refreshConfig()
+        await refreshConfigIfNeeded()
     }
 
     /// 回前台：检测被其他设备挤下线。
@@ -59,5 +59,11 @@ struct SQLinkApp: App {
                 showKickedAlert = true
             }
         }
+    }
+
+    private func refreshConfigIfNeeded() async {
+        await settings.refreshConfig()
+        // 冷启动补齐头像：本地为空（重装 / 老用户）时从服务端拉一次。
+        await settings.syncAvatarFromServer()
     }
 }

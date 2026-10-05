@@ -26,6 +26,9 @@ struct AuthTokenData: Decodable {
     let email: String?
     let isPro: Bool?
     let code: String?
+    /// 登录 / 注册响应里的头像 URL（后端 app.js 的 login 返回 `avatar: user.avatar || ''`）。
+    /// 此前这里漏了解码，导致「重装后登录成功却拿不到头像」——服务端明明给了，客户端把它丢了。
+    let avatar: String?
 }
 
 /// 激活码兑换返回：仅需会员判定结果（会员为本地永久判定，无到期时间 / 类型 / 过期等冗余字段）。
@@ -33,10 +36,11 @@ struct MembershipData: Decodable {
     let isPro: Bool
 }
 
-/// 当前会话校验返回：仅需 email / isPro，用于冷启动 / 回前台确认会话仍有效并同步会员态。
-struct AuthMeData: Decodable {
+/// GET /api/user/membership 返回的用户资料（需登录）。
+/// 仅用于补齐本地缺失的头像 —— 会员状态仍按「本地永久判定」处理，不用它的 isPro 覆盖本地值。
+struct MembershipInfoData: Decodable {
     let email: String?
-    let isPro: Bool?
+    let avatar: String?
 }
 
 struct AvatarData: Decodable {
@@ -71,22 +75,32 @@ final class AuthService {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
         let (data, response) = try await URLSession.shared.data(for: req)
+        let httpResp = response as? HTTPURLResponse
         // 滑动续期：后端在 token 临近过期时会通过 x-auth-token 响应头返回新签发的 30 天 token，
         // 前端据此刷新本地 token，活跃用户不会在 30 天到期时突然掉线。
-        if let httpResp = response as? HTTPURLResponse,
-           let newToken = httpResp.value(forHTTPHeaderField: "x-auth-token"), !newToken.isEmpty {
+        if let newToken = httpResp?.value(forHTTPHeaderField: "x-auth-token"), !newToken.isEmpty {
             await MainActor.run { AppSettings.shared.authToken = newToken }
+        }
+        // token 失效（过期 / 被服务端拒绝 / 改过密码）：清除本地登录态，回到登录页。
+        // 这样「90 天绝对上限」触发或 token 被吊销时，用户会被平滑引导重新登录，
+        // 而不是停留在「已登录但所有请求都 401」的卡死状态。
+        if httpResp?.statusCode == 401 {
+            await MainActor.run { AppSettings.shared.logout() }
+        }
+        // 404：Express 返回的是一页 HTML（"Cannot POST /xxx"），不是 JSON。
+        // 直接解码只会抛出英文 DecodingError，用户看到 "The data couldn't be read…" 无从下手；
+        // 单独识别出来，明确告知「后端未更新 / 接口不存在」。
+        if httpResp?.statusCode == 404 {
+            throw AuthError.message("服务端没有该接口（后端可能尚未更新，请先部署最新后端）")
         }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let resp = try decoder.decode(APIResponse<T>.self, from: data)
-        // token 失效（过期 / 被服务端拒绝）：清除本地登录态，回到登录页。
-        // 这样「90 天绝对上限」触发或 token 被吊销时，用户会被平滑引导重新登录，
-        // 而不是停留在「已登录但所有请求都 401」的卡死状态。
-        if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 401 {
-            await MainActor.run { AppSettings.shared.logout() }
+        do {
+            return try decoder.decode(APIResponse<T>.self, from: data)
+        } catch {
+            // 非 JSON 响应或字段不匹配：统一转成中文提示，不把 DecodingError 抛到界面上。
+            throw AuthError.invalidResponse
         }
-        return resp
     }
 
     private func require<T>(_ resp: APIResponse<T>, extract: (T) -> Bool) async throws {
@@ -103,20 +117,20 @@ final class AuthService {
         return nil
     }
 
-    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, isPro: Bool) {
+    func register(baseURL: String, email: String, code: String, password: String) async throws -> (token: String, email: String, isPro: Bool, avatar: String) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/register", body: ["email": email, "code": code, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.isPro ?? false)
+        return (token, email, d.isPro ?? false, d.avatar ?? "")
     }
 
-    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, isPro: Bool) {
+    func login(baseURL: String, email: String, password: String) async throws -> (token: String, email: String, isPro: Bool, avatar: String) {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/login", body: ["email": email, "password": password])
         guard resp.code == 200, let d = resp.data, let token = d.token, let email = d.email else {
             throw AuthError.message(resp.message)
         }
-        return (token, email, d.isPro ?? false)
+        return (token, email, d.isPro ?? false, d.avatar ?? "")
     }
 
     func sendResetCode(baseURL: String, email: String) async throws -> String? {
@@ -130,6 +144,46 @@ final class AuthService {
 
     func resetPassword(baseURL: String, email: String, code: String, password: String) async throws {
         let resp: APIResponse<AuthTokenData> = try await request(baseURL: baseURL, path: "/api/auth/reset-password", body: ["email": email, "code": code, "password": password])
+        if resp.code != 200 { throw AuthError.message(resp.message) }
+    }
+
+    /// 拉取当前登录账号的资料（需登录）。用于重装 / 冷启动后补齐本地缺失的头像 URL。
+    func fetchMembership(baseURL: String, token: String) async throws -> MembershipInfoData {
+        let resp: APIResponse<MembershipInfoData> = try await request(baseURL: baseURL, path: "/api/user/membership", token: token)
+        guard resp.code == 200, let d = resp.data else { throw AuthError.message(resp.message) }
+        return d
+    }
+
+    /// 校验 token 是否仍有效（一号一用：检测被其他设备挤下线 / 过期）。
+    /// 直接读 HTTP 状态码：401 = 已失效（被踢 / 过期，后端 token_version 不匹配）；
+    /// 其余状态码 = 有效（忽略响应体）。网络错误抛出 AuthError.network，调用方据此【不】登出，避免离线误杀在线用户。
+    func validateToken(baseURL: String, token: String) async throws -> Bool {
+        guard let apiURL = url(base: baseURL, path: "/api/user/membership") else {
+            throw AuthError.message("接口地址无效，请检查服务端地址配置")
+        }
+        var req = URLRequest(url: apiURL)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            let httpResp = response as? HTTPURLResponse
+            return httpResp?.statusCode != 401
+        } catch {
+            throw AuthError.network(error)
+        }
+    }
+
+    /// 修改密码（需登录）：先校验当前密码，通过后重置为新密码。
+    /// 后端对应 POST /api/auth/change-password，要求 Bearer token + 旧密码 ——
+    /// 「只有登录成功之后才可以修改密码」由服务端强制，客户端无法绕过。
+    /// 修改成功后服务端会让所有旧 token 立即失效，因此必须重新登录。
+    func changePassword(baseURL: String, token: String, oldPassword: String, newPassword: String) async throws {
+        let resp: APIResponse<EmptyData> = try await request(
+            baseURL: baseURL,
+            path: "/api/auth/change-password",
+            token: token,
+            body: ["oldPassword": oldPassword, "newPassword": newPassword]
+        )
         if resp.code != 200 { throw AuthError.message(resp.message) }
     }
 
@@ -166,38 +220,5 @@ final class AuthService {
     func deleteAccount(baseURL: String, token: String) async throws {
         let resp: APIResponse<EmptyData> = try await request(baseURL: baseURL, path: "/api/user/delete", token: token, body: [:])
         if resp.code != 200 { throw AuthError.message(resp.message) }
-    }
-
-    /// 校验当前 token 是否仍有效（冷启动 / 回前台检测被踢下线）。
-    /// 后端：GET /api/user/membership（带 Bearer token），返回 200 + {email, avatar, isPro}；
-    /// 失效（被其他设备挤下线 / 过期被吊销）返回 401。
-    /// 仅在 token 失效（401）时主动登出；网络错误不登出（避免无网时误杀离线用户）。
-    func validateToken(baseURL: String, token: String) async throws -> AuthMeData {
-        guard let apiURL = url(base: baseURL, path: "/api/user/membership") else {
-            throw AuthError.message("接口地址无效，请检查服务端地址配置")
-        }
-        var req = URLRequest(url: apiURL)
-        req.httpMethod = "GET"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-                // token 已失效：被其他设备挤下线或过期被吊销，主动登出并抛出明确提示
-                await MainActor.run { AppSettings.shared.logout() }
-                throw AuthError.message("您的账号已在其他设备登录，当前设备已被强制下线，请重新登录")
-            }
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let resp = try decoder.decode(APIResponse<AuthMeData>.self, from: data)
-            guard resp.code == 200, let d = resp.data else {
-                throw AuthError.message(resp.message)
-            }
-            return d
-        } catch let e as AuthError {
-            throw e
-        } catch {
-            // 网络层错误（无网 / 超时 / 无法连接）：不登出，交由调用方忽略
-            throw AuthError.network(error)
-        }
     }
 }
