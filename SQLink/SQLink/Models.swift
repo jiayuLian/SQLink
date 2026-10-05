@@ -278,15 +278,11 @@ final class AppSettings: ObservableObject {
         isPro = false
     }
 
-    /// avatar：登录 / 注册响应里带回的头像 URL（以服务端为准）。
-    /// 重装后本地 UserDefaults 会被清空，头像只能靠它恢复；为空时不覆盖本地已有值，
-    /// 这样即便后端是旧版本（登录响应没带 avatar）也不会把已缓存的头像抹掉。
-    func applyMembership(_ email: String, token: String, isPro: Bool, avatar: String = "") {
+    func applyMembership(_ email: String, token: String, isPro: Bool) {
         self.authEmail = email
         self.authToken = token
         self.guestMode = false
         self.isPro = isPro
-        if !avatar.isEmpty { self.avatarURL = avatar }
         // 登录/注册成功后固化凭据：登录态与会员态均存【本地】Keychain（见 persistCredentials）。
         persistCredentials()
     }
@@ -317,6 +313,30 @@ final class AppSettings: ObservableObject {
         self.isPro = KeychainHelper.loadLogin(KeychainHelper.isProLoginKey) == "1"
     }
 
+    /// 校验当前会话是否仍有效（冷启动 / 回前台检测被其他设备挤下线）。
+    /// 返回 true 表示会话已失效并已登出（需 UI 弹出「已被强制下线」提示）。
+    /// 仅在已登录（authToken 非空且非游客）时校验；网络错误不视为失效（避免离线误杀）。
+    /// 依赖后端 GET /api/user/membership 在 token 失效（被踢 / 过期）时返回 401（该接口后端已存在，直接复用，无需新增）。
+    func validateSession() async -> Bool {
+        guard !authToken.isEmpty, !guestMode else { return false }
+        do {
+            let me = try await AuthService.shared.validateToken(baseURL: apiBaseURL, token: authToken)
+            if let pro = me.isPro {
+                await MainActor.run { self.isPro = pro }
+            }
+            return false
+        } catch let e as AuthError {
+            switch e {
+            case .message(let m) where m.contains("其他设备"):
+                return true   // 被踢，validateToken 内部已 logout
+            default:
+                return false  // 网络 / 其他业务错误不登出
+            }
+        } catch {
+            return false
+        }
+    }
+
     /// 会员状态为【本地永久】判定：激活码兑换 / 登录时由后端授予后，本地 isPro 即为准，
     /// 不再向服务器发起会员校验请求（避免无网络时误判，也符合「会员认证不依赖后端」的设计）。
     /// 这里仅在冷启动时刷新公开配置（免费额度 / 价格），不涉及任何会员校验。
@@ -333,23 +353,6 @@ final class AppSettings: ObservableObject {
             await MainActor.run { self.plan = p }
         } catch {
             print("刷新公共配置失败：\(error.localizedDescription)")
-        }
-    }
-
-    /// 冷启动 / 恢复登录态后，从服务端补齐本地缺失的头像。
-    /// 场景：本次修复之前登录过的用户（Keychain 里有 token、但 UserDefaults 里的头像 URL 为空），
-    /// 或重装后仅恢复了登录态的情形——服务端 sqlink_users.avatar 仍有记录，拉回来即可显示。
-    /// 仅当「已登录（有 token）且本地头像为空」时才发请求；失败静默处理，绝不影响任何功能。
-    func syncAvatarFromServer() async {
-        guard !authToken.isEmpty, avatarURL.isEmpty else { return }
-        do {
-            let info = try await AuthService.shared.fetchMembership(baseURL: apiBaseURL, token: authToken)
-            if let a = info.avatar, !a.isEmpty {
-                await MainActor.run { self.avatarURL = a }
-            }
-        } catch {
-            // 后端未部署该接口（404）或网络异常时忽略：头像缺失不影响其它功能。
-            print("同步头像失败：\(error.localizedDescription)")
         }
     }
 }
