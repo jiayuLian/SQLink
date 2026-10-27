@@ -583,6 +583,18 @@ struct CardRowButtonStyle: ButtonStyle {
     }
 }
 
+/// 延迟构造 destination。
+///
+/// `NavigationLink(destination:)` 放在 `List` / 卡片列表里时，destination 这个 struct 会在
+/// 列表**首次渲染**时就构造好（`@State` 的初值也在那一刻定格），push 时用的还是那份旧值。
+/// 表现就是：第一次进连接正常，退回来再进——库列表一片空白（缓存是进页面之后才有的）。
+/// 包一层 LazyView，真正的页面在 push 那一刻才构造，读到的缓存与参数都是最新的。
+struct LazyView<Content: View>: View {
+    private let build: () -> Content
+    init(@ViewBuilder _ build: @escaping () -> Content) { self.build = build }
+    var body: some View { build() }
+}
+
 /// 卡片中的一行：可选图标 + 标题 + 右侧箭头。几何与系统 List 行一致。
 struct CardRow<Destination: View>: View {
     var icon: String? = nil

@@ -12,7 +12,7 @@ struct ConnectionsView: View {
                         .foregroundColor(.secondary)
                 }
                 ForEach(store.profiles) { p in
-                    NavigationLink(destination: DatabaseBrowserView(profile: p)) {
+                    NavigationLink(destination: LazyView { DatabaseBrowserView(profile: p) }) {
                         ConnectionRow(profile: p)
                     }
                     .swipeActions(edge: .trailing) {

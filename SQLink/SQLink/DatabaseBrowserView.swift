@@ -75,7 +75,7 @@ struct DatabaseBrowserView: View {
                            isEmpty: filtered.isEmpty, emptyText: "没有匹配的数据库") {
             ForEach(filtered.indices, id: \.self) { i in
                 CardRow(title: filtered[i],
-                        destination: TableListView(profile: profile, db: filtered[i], connection: conn))
+                        destination: LazyView { TableListView(profile: profile, db: filtered[i], connection: conn) })
                 if i != filtered.count - 1 { CardRowDivider() }
             }
         }
@@ -84,17 +84,31 @@ struct DatabaseBrowserView: View {
     }
 
     /// 有可复用会话就立刻出界面（后台静默刷新库列表），否则才真正建连。
+    ///
+    /// ⚠️ 不能只信 `init` 里读到的缓存：`NavigationLink(destination:)` 放在 `List` 里时，
+    /// destination 这个 struct 在列表**首次渲染**时就已经构造好了（那时连接池还是空的），
+    /// push 进来用的仍是那份旧 struct，`@State` 的初值就是 `nil` / 空数组
+    /// （第二次进入连接时库列表一片空白、永远转不出来的根因）。
+    /// 所以这里必须重新从池里取一次会话，并把结果**写回 @State**。
     func prepare() async {
-        if let cached = connection ?? ConnectionPool.shared.connection(for: profile.id) {
-            // 静默刷新：失败不打扰用户，后续查询会经 withReconnect 自动重连
-            if let dbs = try? await withReconnect(cached, { try await cached.listDatabases() }) {
-                await MainActor.run { self.databases = dbs }
-                ConnectionPool.shared.setDatabases(dbs, for: profile.id)
-            }
-            await MainActor.run { self.loading = false }
+        guard let cached = ConnectionPool.shared.connection(for: profile.id) else {
+            // 池里确实没有会话（首次进入、或会话被丢弃）：真正建连
+            await connect()
             return
         }
-        await connect()
+        // 先把缓存铺上去（同步到 @State），界面立刻有内容
+        let cachedDBs = ConnectionPool.shared.databases(for: profile.id) ?? []
+        await MainActor.run {
+            self.connection = cached
+            if self.databases.isEmpty { self.databases = cachedDBs }
+            self.loading = false
+        }
+        // 静默刷新：失败不打扰用户（保留旧列表），后续查询会经 withReconnect 自动重连
+        if let dbs = try? await withReconnect(cached, { try await cached.listDatabases() }),
+           !dbs.isEmpty {
+            await MainActor.run { self.databases = dbs }
+            ConnectionPool.shared.setDatabases(dbs, for: profile.id)
+        }
     }
 
     func connect() async {
@@ -150,9 +164,19 @@ struct TableListView: View {
     var body: some View {
         Group {
             if let error = error {
-                Text(error).foregroundColor(.red).padding()
-                    .navigationTitle(db)
-                    .navigationBarTitleDisplayMode(.inline)
+                VStack(spacing: 12) {
+                    Text(error).foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Button("重试") {
+                        self.error = nil
+                        Task { await load() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding()
+                .navigationTitle(db)
+                .navigationBarTitleDisplayMode(.inline)
             } else {
                 // 首次加载同样不出整屏转圈：直接给空列表 + 顶部细进度条，
                 // 有缓存（返回上一级）时列表立刻就在，看起来是原地不动。
@@ -163,7 +187,9 @@ struct TableListView: View {
                     ForEach(filtered.indices, id: \.self) { i in
                         let t = filtered[i]
                         CardRow(icon: t.type == "VIEW" ? "eye" : "table", title: t.name,
-                                destination: TableDetailView(connection: connection, db: db, table: t.name))
+                                destination: LazyView {
+                                    TableDetailView(connection: connection, db: db, table: t.name)
+                                })
                         if i != filtered.count - 1 { CardRowDivider() }
                     }
                 }
@@ -201,13 +227,28 @@ struct TableListView: View {
     }
 
     func load() async {
+        // 同库列表：destination struct 可能早于缓存构造，先把池里的表列表铺上来
+        if tables.isEmpty,
+           let cached = ConnectionPool.shared.tables(for: profile.id, db: db), !cached.isEmpty {
+            await MainActor.run {
+                self.tables = cached
+                self.loading = false
+            }
+        }
         do {
             let t = try await withReconnect(connection) { try await connection.listTables(db: db) }
             ConnectionPool.shared.setTables(t, for: profile.id, db: db)
-            await MainActor.run { self.tables = t }
+            await MainActor.run {
+                // 空结果不覆盖已有缓存（权限受限 / 响应错位时不要把列表清空）
+                if !t.isEmpty || self.tables.isEmpty { self.tables = t }
+                self.error = nil
+            }
         } catch {
             let msg = error.localizedDescription
-            await MainActor.run { self.error = msg }
+            await MainActor.run {
+                // 有缓存就当静默失败：列表照常看，别把用户已有内容换成一片红字
+                self.error = self.tables.isEmpty ? msg : nil
+            }
         }
         await MainActor.run { loading = false }
     }
