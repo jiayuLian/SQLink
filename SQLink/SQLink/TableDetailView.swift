@@ -905,51 +905,113 @@ struct TableDataView: View {
             }
     }
 
-    /// 跳页弹窗：居中卡片（标题 + 页码输入框 + 首页 / 末页 / 跳转），
-    /// 背景半透明遮罩，点遮罩关闭；点击外部即等同「取消」。
+    /// 跳页弹窗：iOS 弹窗质感的小卡片。
+    /// 位置 = 「扣掉键盘后的剩余区域」居中 —— 之前用固定 offset 上顶，键盘高时会把卡片顶到导航栏上。
     private var jumpDialog: some View {
         ZStack {
             Color.black.opacity(0.35)
                 .ignoresSafeArea()
+                .contentShape(Rectangle())
                 .onTapGesture { closeJumpDialog() }
 
-            VStack(alignment: .leading, spacing: 16) {
-                Text("跳转到页码")
-                    .font(.system(size: 17, weight: .semibold))
-
-                TextField("页码（1 - \(maxPage)）", text: $jumpText)
-                    .keyboardType(.numberPad)
-                    .font(.system(size: 16, design: .monospaced))
-                    .focused($jumpFocused)
-                    .onAppear {
-                        // 与 Android 一致：弹出即聚焦，直接敲数字
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { jumpFocused = true }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 9)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(Color.accentColor.opacity(0.55), lineWidth: 1)
-                    )
-
-                HStack(spacing: 20) {
-                    Button("首页") { applyJump(to: 1) }
-                    Button("末页") { applyJump(to: maxPage) }
-                    Spacer(minLength: 0)
-                    Button("跳转") { jumpToTypedPage() }
-                }
-                .font(.system(size: 15))
+            VStack {
+                Spacer(minLength: 12)
+                jumpCard
+                Spacer(minLength: 12)
             }
-            .padding(20)
-            .frame(maxWidth: 280)
-            .background(Color(UIColor.secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: Color.black.opacity(0.18), radius: 18, x: 0, y: 6)
-            .padding(.horizontal, 30)
-            // 键盘弹出时把卡片往上顶，避免遮挡输入框与按钮
-            .offset(y: -min(keyboardInset, 320) / 2)
+            .padding(.horizontal, 32)
+            .padding(.bottom, min(keyboardInset, 420))
+            .animation(.easeOut(duration: 0.22), value: keyboardInset)
         }
+        .ignoresSafeArea(.keyboard)
         .transition(.opacity)
+    }
+
+    private var jumpCard: some View {
+        VStack(spacing: 0) {
+            Text("跳转到页码")
+                .font(.system(size: 16, weight: .semibold))
+                .padding(.top, 18)
+                .padding(.bottom, 14)
+
+            // 快捷入口 + 总页数提示（原来和「跳转」挤在同一行，窄屏很局促）
+            HStack(spacing: 8) {
+                quickPageButton("首页", target: 1)
+                quickPageButton("末页", target: maxPage)
+                Spacer(minLength: 6)
+                Text("共 \(maxPage) 页")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 12)
+
+            TextField("1 – \(maxPage)", text: $jumpText)
+                .keyboardType(.numberPad)
+                .font(.system(size: 17, weight: .medium, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .focused($jumpFocused)
+                .onAppear {
+                    // 与 Android 一致：弹出即聚焦，直接敲数字
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { jumpFocused = true }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.45), lineWidth: 1)
+                )
+                .padding(.horizontal, 18)
+                .padding(.bottom, 16)
+
+            // 底部按钮：左右分割，与系统弹窗一致，并补上「取消」（原来只能点空白处关闭）
+            Rectangle()
+                .fill(Color.primary.opacity(0.12))
+                .frame(height: 0.5)
+
+            HStack(spacing: 0) {
+                Button { closeJumpDialog() } label: {
+                    Text("取消")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 46)
+                        .contentShape(Rectangle())
+                }
+                Rectangle()
+                    .fill(Color.primary.opacity(0.12))
+                    .frame(width: 0.5, height: 46)
+                Button { jumpToTypedPage() } label: {
+                    Text("跳转")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 46)
+                        .contentShape(Rectangle())
+                }
+            }
+        }
+        .frame(maxWidth: 300)
+        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.18), radius: 18, x: 0, y: 6)
+    }
+
+    /// 「首页 / 末页」快捷按钮（胶囊小标签）。已在当前页时置灰。
+    private func quickPageButton(_ title: String, target: Int) -> some View {
+        Button { applyJump(to: target) } label: {
+            Text(title)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundColor(target == page ? Color.secondary : Color.accentColor)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().fill(Color.accentColor.opacity(target == page ? 0.05 : 0.10))
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(target == page)
     }
 
     private func applyJump(to target: Int) {
