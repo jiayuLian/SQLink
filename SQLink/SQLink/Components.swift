@@ -57,12 +57,21 @@ struct ResultGridView: View {
         if columns.isEmpty {
             Text("无结果集").foregroundColor(.secondary).padding()
         } else {
-            ScrollView([.horizontal, .vertical]) {
+            // 外层只负责横向滚动：表头和数据行在同一个横向坐标系里，
+            // 左右滑动时列名与内容始终对齐。
+            ScrollView(.horizontal, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
+                    // 表头固定在顶部，不参与纵向滚动。
                     headerRow
-                    ForEach(0..<rows.count, id: \.self) { ri in
-                        dataRow(ri: ri)
+                    // 内层只负责纵向滚动：往下滑数据时字段名保持可见。
+                    ScrollView(.vertical, showsIndicators: true) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(0..<rows.count, id: \.self) { ri in
+                                dataRow(ri: ri)
+                            }
+                        }
                     }
+                    .frame(maxHeight: .infinity)
                 }
             }
             .frame(maxHeight: .infinity)
@@ -177,12 +186,18 @@ struct EditableGridView: View {
     }
 
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
+        // 与 ResultGridView 相同：外层横向、内层纵向，表头固定不动。
+        ScrollView(.horizontal, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 headerRow
-                ForEach(0..<rows.count, id: \.self) { ri in
-                    dataRow(ri: ri)
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(0..<rows.count, id: \.self) { ri in
+                            dataRow(ri: ri)
+                        }
+                    }
                 }
+                .frame(maxHeight: .infinity)
             }
         }
         .frame(height: 320)
