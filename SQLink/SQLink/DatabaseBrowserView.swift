@@ -14,6 +14,16 @@ struct DatabaseBrowserView: View {
     @State private var connectingConn: MySQLConnection?
     @Environment(\.dismiss) private var dismiss
 
+    /// 有缓存会话时直接用它的数据当初始值，避免重建视图时先闪一帧「正在连接」。
+    init(profile: ConnectionProfile) {
+        self.profile = profile
+        let cached = ConnectionPool.shared.connection(for: profile.id)
+        _connection = State(initialValue: cached)
+        _databases = State(initialValue: ConnectionPool.shared.databases(for: profile.id) ?? [])
+        _selectedDB = State(initialValue: profile.database.isEmpty ? nil : profile.database)
+        _loading = State(initialValue: cached == nil)
+    }
+
     private var filtered: [String] {
         search.isEmpty ? databases : databases.filter { $0.localizedCaseInsensitiveContains(search) }
     }
@@ -28,21 +38,6 @@ struct DatabaseBrowserView: View {
                     Button("重试") { Task { await connect() } }
                         .buttonStyle(.borderedProminent)
                 }.padding()
-            } else if loading {
-                // 主机不可达时 connect 会等到超时（十几秒）。给一个取消出口，
-                // 不用干等，也不必杀进程。
-                VStack(spacing: 18) {
-                    ProgressView("正在连接 \(profile.host):\(profile.port)…")
-                        .multilineTextAlignment(.center)
-                    Text("主机不可达时最长等待十几秒")
-                        .font(.caption2).foregroundColor(.secondary)
-                    Button("取消") {
-                        connectingConn?.close()
-                        dismiss()
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .padding()
             } else if let conn = connection {
                 if let db = selectedDB {
                     TableListView(profile: profile, db: db, connection: conn, onSwitchDB: { selectedDB = nil })
@@ -59,10 +54,38 @@ struct DatabaseBrowserView: View {
                     .navigationTitle(profile.name)
                     .navigationBarTitleDisplayMode(.inline)
                 }
+            } else {
+                // 只有「本次真的需要新建连接」时才出现；已连上的会话会直接复用，不再闪这个界面。
+                // 主机不可达时 connect 有 5 秒超时，期间可取消。
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("正在连接 \(profile.host):\(profile.port)")
+                        .font(.footnote).foregroundColor(.secondary)
+                    Button("取消") {
+                        connectingConn?.close()
+                        dismiss()
+                    }
+                    .font(.footnote)
+                }
+                .padding()
             }
         }
-        .task { await connect() }
+        .task { await prepare() }
         .onAppear { UserDefaults.standard.set(profile.id.uuidString, forKey: "lastConnectionID") }
+    }
+
+    /// 有可复用会话就立刻出界面（后台静默刷新库列表），否则才真正建连。
+    func prepare() async {
+        if let cached = connection ?? ConnectionPool.shared.connection(for: profile.id) {
+            // 静默刷新：失败不打扰用户，后续查询会经 withReconnect 自动重连
+            if let dbs = try? await withReconnect(cached, { try await cached.listDatabases() }) {
+                await MainActor.run { self.databases = dbs }
+                ConnectionPool.shared.setDatabases(dbs, for: profile.id)
+            }
+            await MainActor.run { self.loading = false }
+            return
+        }
+        await connect()
     }
 
     func connect() async {
@@ -72,6 +95,7 @@ struct DatabaseBrowserView: View {
             connectingConn = conn
             try await conn.connect(password: store.password(for: profile))
             let dbs = try await conn.listDatabases()
+            ConnectionPool.shared.store(conn, databases: dbs, for: profile.id)
             await MainActor.run {
                 self.connection = conn
                 self.databases = dbs
@@ -105,7 +129,8 @@ struct TableListView: View {
 
     var body: some View {
         Group {
-            if loading {
+            // 刷新时保留已有列表，避免每次返回都先闪一屏空白转圈
+            if loading && tables.isEmpty {
                 ProgressView()
             } else if let error = error {
                 Text(error).foregroundColor(.red).padding()

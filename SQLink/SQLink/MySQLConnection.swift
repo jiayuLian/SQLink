@@ -179,12 +179,15 @@ final class MySQLConnection {
         while let c = cur {
             fd = socket(c.pointee.ai_family, c.pointee.ai_socktype, c.pointee.ai_protocol)
             if fd >= 0 {
-                if Darwin.connect(fd, c.pointee.ai_addr, c.pointee.ai_addrlen) == 0 { break }
+                // 非阻塞 connect + poll 超时：主机不可达时不再干等系统默认的 ~75 秒
+                if connectWithTimeout(fd, c.pointee.ai_addr, c.pointee.ai_addrlen, timeoutMs: 5000) { break }
                 Darwin.close(fd); fd = -1
             }
             cur = c.pointee.ai_next
         }
-        if fd < 0 { throw MySQLError.connectionFailed("无法连接到 \(host):\(port)") }
+        if fd < 0 {
+            throw MySQLError.connectionFailed("无法连接到 \(host):\(port)（5 秒超时，请检查 IP、端口和网络）")
+        }
 
         var tv = timeval()
         tv.tv_sec = 30
@@ -192,6 +195,26 @@ final class MySQLConnection {
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         return fd
+    }
+
+    /// 带回超时的 connect（非阻塞 + poll）。系统默认 connect 在主机不可达时要等约 75 秒，
+    /// 这里 5 秒即放弃，让界面能快速给出失败原因。
+    private func connectWithTimeout(_ fd: Int32, _ addr: UnsafePointer<sockaddr>, _ len: socklen_t, timeoutMs: Int32) -> Bool {
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        var ok = false
+        if Darwin.connect(fd, addr, len) == 0 {
+            ok = true
+        } else if errno == EINPROGRESS {
+            var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+            if poll(&pfd, 1, timeoutMs) > 0, (pfd.revents & Int16(POLLOUT)) != 0 {
+                var err: Int32 = 0
+                var elen = socklen_t(MemoryLayout<Int32>.size)
+                if getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) == 0, err == 0 { ok = true }
+            }
+        }
+        _ = fcntl(fd, F_SETFL, flags)
+        return ok
     }
 
     // MARK: - Greeting parse
