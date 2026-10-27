@@ -816,6 +816,12 @@ struct TableDataView: View {
                                     }
                             )
                             .onTapGesture(count: 2) { gridScale = 1 }
+                            // 右下角手动缩放（双指捏合仍然可用）
+                            .overlay(alignment: .bottomTrailing) {
+                                GridZoomControls(scale: $gridScale)
+                                    .padding(.trailing, 10)
+                                    .padding(.bottom, 10)
+                            }
                     } else {
                         ResultGridView(columns: previewCols, rows: previewRows, primaryKey: primaryKey, scale: gridScale * gridMagnify)
                             .frame(maxHeight: .infinity)
@@ -828,6 +834,12 @@ struct TableDataView: View {
                                     }
                             )
                             .onTapGesture(count: 2) { gridScale = 1 }
+                            // 右下角手动缩放（双指捏合仍然可用）
+                            .overlay(alignment: .bottomTrailing) {
+                                GridZoomControls(scale: $gridScale)
+                                    .padding(.trailing, 10)
+                                    .padding(.bottom, 10)
+                            }
                     }
 
                     if let saveMessage = saveMessage {

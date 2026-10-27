@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 extension Array {
     subscript(safe index: Int) -> Element? {
@@ -142,6 +143,62 @@ struct ResultGridView: View {
             Button { } label: { Label("NULL（无值）", systemImage: "nosign") }
                 .disabled(true)
         }
+    }
+}
+
+/// 结果表格右下角的缩放按钮组（＋ / 百分比 / －）。
+/// 双指捏合缩放手势仍然保留，这里只是提供一个「点一下」的等价入口：
+/// 模拟器、单手操作或手势不好触发时可以直接点按钮放大/缩小，点百分比复位到 100%。
+struct GridZoomControls: View {
+    @Binding var scale: CGFloat
+
+    private let minScale: CGFloat = 0.6
+    private let maxScale: CGFloat = 3.0
+    private let step: CGFloat = 0.2
+
+    private var canZoomIn: Bool { scale < maxScale - 0.001 }
+    private var canZoomOut: Bool { scale > minScale + 0.001 }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            zoomButton(systemName: "plus", enabled: canZoomIn) {
+                scale = min(max(scale + step, minScale), maxScale)
+            }
+
+            Text("\(Int((scale * 100).rounded()))%")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 40, height: 24)
+                .contentShape(Rectangle())
+                .onTapGesture { scale = 1.0 }
+
+            zoomButton(systemName: "minus", enabled: canZoomOut) {
+                scale = min(max(scale - step, minScale), maxScale)
+            }
+        }
+        .frame(width: 40)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(UIColor.secondarySystemGroupedBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.18), radius: 6, x: 0, y: 2)
+    }
+
+    @ViewBuilder
+    private func zoomButton(systemName: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+        .foregroundColor(enabled ? .accentColor : Color.secondary.opacity(0.35))
+        .disabled(!enabled)
     }
 }
 

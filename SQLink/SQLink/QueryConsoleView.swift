@@ -387,6 +387,11 @@ struct QueryConsoleView: View {
                                         }
                                 )
                                 .onTapGesture(count: 2) { gridScale = 1 }
+                                // 右下角手动缩放（双指捏合仍然可用）
+                                .overlay(alignment: .bottomTrailing) {
+                                    GridZoomControls(scale: $gridScale)
+                                        .padding(10)
+                                }
                         } else {
                             ResultGridView(columns: columns, rows: rows, scale: gridScale * gridMagnify)
                                 .frame(height: 320)
@@ -400,6 +405,11 @@ struct QueryConsoleView: View {
                                         }
                                 )
                                 .onTapGesture(count: 2) { gridScale = 1 }
+                                // 右下角手动缩放（双指捏合仍然可用）
+                                .overlay(alignment: .bottomTrailing) {
+                                    GridZoomControls(scale: $gridScale)
+                                        .padding(10)
+                                }
                         }
                         Color.clear.frame(height: 30).id("resultBottom")
                     }
