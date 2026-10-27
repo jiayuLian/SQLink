@@ -52,6 +52,19 @@ func cachingSha2Password(password: [UInt8], scramble: [UInt8]) -> [UInt8] {
     return result
 }
 
+// MARK: - SQL 字面量
+
+/// 把任意字符串包成安全的 SQL 字面量（单引号字符串）。
+///
+/// 两条规则缺一不可：
+/// 1. 单引号用标准写法 `''` 重复一次 —— 这是任何 sql_mode（含 `NO_BACKSLASH_ESCAPES`）都成立的写法；
+/// 2. 反斜杠必须转成 `\\` —— 默认 sql_mode 下 MySQL 仍把 `\n` `\t` `\0` 当转义序列，
+///    不转义的话值里的字面反斜杠会被悄悄改写（编辑/导出再导入就会出现数据变样）。
+func sqlLiteral(_ s: String) -> String {
+    "'" + s.replacingOccurrences(of: "\\", with: "\\\\")
+             .replacingOccurrences(of: "'", with: "''") + "'"
+}
+
 // MARK: - Length-encoded helpers
 func lenEncInt(_ n: UInt64) -> [UInt8] {
     if n < 251 { return [UInt8(n)] }

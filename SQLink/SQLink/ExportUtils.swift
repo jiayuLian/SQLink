@@ -56,8 +56,21 @@ struct ExportUtils {
 
     static func timestamp() -> String {
         let f = DateFormatter()
+        // 固定 POSIX 区域：某些区域设置下数字/日历不同，会得到非预期的文件名
+        f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyyMMdd_HHmmss"
         return f.string(from: Date())
+    }
+
+    /// 表名可能含 `/`、空格、emoji 等不能进文件名的字符（MySQL 反引号里允许任意字符）。
+    /// 直接拼进路径会写失败，或被解释成子目录，统一替换成 `_`。
+    private static func safeFileName(_ s: String) -> String {
+        var out = ""
+        for ch in s {
+            if ch.isLetter || ch.isNumber || ch == "_" || ch == "-" { out.append(ch) }
+            else { out.append("_") }
+        }
+        return out.isEmpty ? "table" : String(out.prefix(40))
     }
 
     /// CSV 单元格转义（与 buildCSV 一致）。
@@ -69,9 +82,10 @@ struct ExportUtils {
     }
 
     private static func sqlValue(_ v: String?) -> String {
-        // 仅 nil 视为 NULL；空字符串要写成 ''，与 CSV 路径保持一致
+        // 仅 nil 视为 NULL；空字符串要写成 ''，与 CSV 路径保持一致。
+        // 转义规则与 App 内编辑共用 sqlLiteral（单引号 + 反斜杠）。
         guard let s = v else { return "NULL" }
-        return "'" + s.replacingOccurrences(of: "'", with: "''") + "'"
+        return sqlLiteral(s)
     }
 
     /// 流式导出整张表（按筛选/排序）。
@@ -93,20 +107,31 @@ struct ExportUtils {
                                      onProgress: @escaping (Double, Int) -> Void) async throws -> URL {
         let safeTable = table.replacingOccurrences(of: "`", with: "``")
         let ts = ExportUtils.timestamp()
-        let fileName = format == .csv ? "\(safeTable)_\(ts).csv" : "\(safeTable)_\(ts).sql"
+        let fileBase = safeFileName(table)
+        let fileName = format == .csv ? "\(fileBase)_\(ts).csv" : "\(fileBase)_\(ts).sql"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
 
         let total = try await withReconnect(connection) { try await connection.countRows(db: db, table: table, whereClause: whereClause) }
         let limit = maxRows ?? total
-        guard limit > 0 else {
-            // 空结果也生成一个空文件，保证分享面板能弹出
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-            return url
-        }
 
         FileManager.default.createFile(atPath: url.path, contents: nil)
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
+
+        guard limit > 0 else {
+            // 空结果也生成一个文件，保证分享面板能弹出；
+            // CSV 连表头一起写（用 LIMIT 0 取回列定义），Excel 打开仍能看到列名。
+            if format == .csv,
+               let r = try? await withReconnect(connection, {
+                   try await connection.fetchRows(db: db, table: table, limit: 0, offset: 0,
+                                                  whereClause: whereClause, orderBy: orderBy)
+               }),
+               case .result(let cols, _) = r, !cols.isEmpty {
+                let header = cols.map { csvEscape($0.name) }.joined(separator: ",")
+                handle.write(Data((header + "\n").utf8))
+            }
+            return url
+        }
 
         var fetched = 0
         var offset = 0

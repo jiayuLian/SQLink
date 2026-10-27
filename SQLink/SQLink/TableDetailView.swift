@@ -3,17 +3,26 @@ import UIKit
 import Combine
 
 // MARK: - SQL WHERE / ORDER helpers
-private func quoteLikeLiteral(_ s: String) -> String {
-    s.replacingOccurrences(of: "\\", with: "\\\\")
-      .replacingOccurrences(of: "'", with: "\\'")
-      .replacingOccurrences(of: "%", with: "\\%")
-      .replacingOccurrences(of: "_", with: "\\_")
+
+/// 把用户输入包成 LIKE 模式串，并统一转义通配符。
+///
+/// 之前用 `ESCAPE '\\'`：一是反斜杠本身要参与 SQL 字面量转义，二是
+/// `NO_BACKSLASH_ESCAPES` 下 `'\\'` 会变成两个字符导致 ESCAPE 参数非法（整条语句报错）。
+/// 改用 ASCII 的 `!` 当转义符，与 sql_mode 完全无关；`\` 仍按字面量规则转义。
+private func likePattern(_ s: String, head: Bool, tail: Bool) -> String {
+    var body = ""
+    for ch in s {
+        if ch == "!" || ch == "%" || ch == "_" { body.append("!") }
+        body.append(ch)
+    }
+    // 反斜杠先按字面量规则转义（见 sqlLiteral 注释），再拼通配符
+    body = body.replacingOccurrences(of: "\\", with: "\\\\")
+          .replacingOccurrences(of: "'", with: "''")
+    return "'" + (head ? "%" : "") + body + (tail ? "%" : "") + "' ESCAPE '!'"
 }
 
-private func quoteValue(_ s: String) -> String {
-    "'" + s.replacingOccurrences(of: "\\", with: "\\\\")
-             .replacingOccurrences(of: "'", with: "\\'") + "'"
-}
+/// 字符串字面量：单引号 `''` + 反斜杠转义（与导出、控制台编辑共用同一套规则）。
+private func quoteValue(_ s: String) -> String { sqlLiteral(s) }
 
 /// 根据每个 FilterCondition 的 logic 字段拼接 WHERE。
 /// 第一个条件无前导关系；后续条件用自身的 logic 与前一项连接，
@@ -30,12 +39,12 @@ private func buildWhereClause(conditions: [FilterCondition]) -> String? {
         case .lessOrEqual:   sqlPart = "\(f) <= \(quoteValue(c.value))"
         case .greaterThan:   sqlPart = "\(f) > \(quoteValue(c.value))"
         case .greaterOrEqual: sqlPart = "\(f) >= \(quoteValue(c.value))"
-        case .contains:      sqlPart = "\(f) LIKE '%\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'"
-        case .notContains:   sqlPart = "\(f) NOT LIKE '%\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'"
-        case .startsWith:    sqlPart = "\(f) LIKE '\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'"
-        case .notStartsWith: sqlPart = "\(f) NOT LIKE '\(quoteLikeLiteral(c.value))%' ESCAPE '\\\\'"
-        case .endsWith:      sqlPart = "\(f) LIKE '%\(quoteLikeLiteral(c.value))' ESCAPE '\\\\'"
-        case .notEndsWith:   sqlPart = "\(f) NOT LIKE '%\(quoteLikeLiteral(c.value))' ESCAPE '\\\\'"
+        case .contains:      sqlPart = "\(f) LIKE \(likePattern(c.value, head: true, tail: true))"
+        case .notContains:   sqlPart = "\(f) NOT LIKE \(likePattern(c.value, head: true, tail: true))"
+        case .startsWith:    sqlPart = "\(f) LIKE \(likePattern(c.value, head: false, tail: true))"
+        case .notStartsWith: sqlPart = "\(f) NOT LIKE \(likePattern(c.value, head: false, tail: true))"
+        case .endsWith:      sqlPart = "\(f) LIKE \(likePattern(c.value, head: true, tail: false))"
+        case .notEndsWith:   sqlPart = "\(f) NOT LIKE \(likePattern(c.value, head: true, tail: false))"
         case .isNull:        sqlPart = "\(f) IS NULL"
         case .isNotNull:     sqlPart = "\(f) IS NOT NULL"
         case .isEmpty:       sqlPart = "\(f) = ''"
@@ -253,6 +262,29 @@ struct TableDetailView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
+                // 加载失败：之前只把错误塞进 @State 却不展示，页面会永远停在「结构（0 列）/ 加载中…」，
+                // 也不给重试入口 —— 用户只能退出去再进来。
+                if let err = error {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 15))
+                            .foregroundColor(.orange)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(err)
+                                .font(.system(size: 13))
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("重试") { Task { await load() } }
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
+                    .cornerRadius(12)
+                }
+
                 // 结构卡片（对齐 Android 版：标题 + 列行 + 底部分隔线）
                 VStack(alignment: .leading, spacing: 0) {
                     Text("结构（\(columns.count) 列）")
@@ -261,7 +293,7 @@ struct TableDetailView: View {
                         .padding(.top, 14)
                         .padding(.bottom, 6)
                     if columns.isEmpty {
-                        Text("加载中…")
+                        Text(error == nil ? "加载中…" : "未能获取表结构")
                             .font(.system(size: 14))
                             .foregroundColor(.secondary)
                             .padding(.horizontal, 16)
@@ -331,7 +363,7 @@ struct TableDetailView: View {
                                   activeOrderBy: $activeOrderBy)
                 } label: {
                     entryRow(icon: "tablecells", title: "查看数据",
-                             trailingText: rowCount.map { "匹配 \($0) 条" } ?? "加载中…")
+                             trailingText: rowCount.map { "匹配 \($0) 条" } ?? (error == nil ? "加载中…" : "未获取"))
                 }
                 .buttonStyle(PlainButtonStyle())
                 .background(Color(UIColor.secondarySystemGroupedBackground))
@@ -361,10 +393,9 @@ struct TableDetailView: View {
                 }
             }
         }
-        .onChange(of: activeWhere) { _ in
-            Task { await load() }
-        }
-        .onChange(of: activeOrderBy) { _ in
+        // 筛选 / 排序任一变化都只触发一次加载（原来两个 onChange 各自 load 一遍，
+        // 一次「应用」会打 4 条 SQL：结构+计数 各两遍）。
+        .onChange(of: filterSignature) { _ in
             Task { await load() }
         }
         .task { await load() }
@@ -485,6 +516,11 @@ struct TableDetailView: View {
         return parts.joined(separator: "，")
     }
 
+    /// 筛选 + 排序的合并签名，用于只触发一次重载。
+    private var filterSignature: String {
+        "\(activeWhere ?? "")|\(activeOrderBy ?? "")"
+    }
+
     /// 筛选 & 排序弹窗：用系统 `.sheet` 呈现。
     /// 旧实现是自定义 `.overlay`（全屏变暗色 + 卡片）叠在 NavigationView 的内容层上，
     /// 其上还带一个 `.onTapGesture` 关闭手势；这种手写模态与宿主 List 的手势/命中测试
@@ -506,14 +542,16 @@ struct TableDetailView: View {
     private func load() async {
         await MainActor.run { loading = true; error = nil }
         do {
-            async let cols = withReconnect(connection) { try await connection.listColumns(db: db, table: table) }
-            async let cnt = withReconnect(connection) { try await connection.countRows(db: db, table: table, whereClause: activeWhere) }
-            let c = try await cols
-            let n = try await cnt
-            await MainActor.run {
-                self.columns = c
-                self.rowCount = n
+            // 表结构在一次会话内基本不变：只在还没拿到时查一次。
+            // 改筛选 / 排序时只需要重算「匹配条数」，不必连表结构一起重查。
+            if columns.isEmpty {
+                let c = try await withReconnect(connection) { try await connection.listColumns(db: db, table: table) }
+                await MainActor.run { self.columns = c }
             }
+            let n = try await withReconnect(connection) {
+                try await connection.countRows(db: db, table: table, whereClause: activeWhere)
+            }
+            await MainActor.run { self.rowCount = n }
         } catch {
             let msg = error.localizedDescription
             await MainActor.run { self.error = msg }
@@ -796,8 +834,16 @@ struct TableDataView: View {
     @State private var saveMessage: String?
     @State private var saveError: String?
 
+    /// 所有主键列。复合主键（>1 列）不能只按第一列定位行 —— 会误改到别的行。
+    private var primaryKeyColumns: [String] {
+        columns.filter { $0.key == "PRI" }.map { $0.field }
+    }
+
+    /// 用于定位行的唯一键：单列主键优先，其次单列唯一键；复合主键返回 nil（禁止编辑）。
     private var primaryKey: String? {
-        columns.first { $0.key == "PRI" }?.field ?? columns.first { $0.key == "UNI" }?.field
+        if primaryKeyColumns.count == 1 { return primaryKeyColumns[0] }
+        if primaryKeyColumns.isEmpty { return columns.first { $0.key == "UNI" }?.field }
+        return nil
     }
 
     /// 是否已应用筛选或排序条件（带 WHERE 或 ORDER BY）。整表裸查为 false，不显示编辑按钮。
@@ -805,11 +851,19 @@ struct TableDataView: View {
         !(activeWhere?.isEmpty ?? true) || !(activeOrderBy?.isEmpty ?? true)
     }
 
+    /// 筛选 + 排序的合并签名，用于只触发一次重载。
+    private var filterSignature: String {
+        "\(activeWhere ?? "")|\(activeOrderBy ?? "")"
+    }
+
     /// 为什么不能编辑（nil = 可以编辑）。顺序按用户最容易撞上的来。
     private var editBlockReason: String? {
         if !settings.isPro { return "数据编辑为会员功能，升级后可修改数据" }
         if loading { return "数据还在加载，请稍候" }
         if error != nil { return "当前数据加载失败，无法编辑" }
+        if primaryKeyColumns.count > 1 {
+            return "该表是复合主键（\(primaryKeyColumns.joined(separator: " + "))），按单列定位可能会改到其它行，请在 SQL 控制台修改"
+        }
         if !hasFilterCondition { return "为避免误改整张表，请先用「筛选&排序」设置条件并应用" }
         if primaryKey == nil { return "结果集里没有主键/唯一键列，无法定位要更新的行" }
         return nil
@@ -820,12 +874,15 @@ struct TableDataView: View {
             .navigationTitle(table)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { dataToolbar }
-            .onChange(of: activeWhere) { _ in page = 1; Task { await load() } }
-            .onChange(of: activeOrderBy) { _ in page = 1; Task { await load() } }
+            // 筛选 + 排序一次「应用」只触发一次加载（原来两个 onChange 会各跑一遍）
+            .onChange(of: filterSignature) { _ in
+                // 回到第 1 页由 page 的 onChange 负责加载；本来就在第 1 页时才直接加载，
+                // 避免「重置页码 + 显式加载」重复请求两次。
+                if page != 1 { page = 1 } else { Task { await load() } }
+            }
             .onChange(of: page) { _ in
                 Task { await load() }
-            }
-            .onChange(of: settings.pageSize) { _ in Task { await load() } }
+            }            .onChange(of: settings.pageSize) { _ in Task { await load() } }
             .task { await load() }
             .sheet(isPresented: $showFilter) { filterSheet }
             // 跳页用「居中卡片 + 遮罩」，与 Android 版一致；iOS 15 没有 presentationDetents，
@@ -916,12 +973,37 @@ struct TableDataView: View {
 
     private var mainContent: some View {
         Group {
-            if loading {
+            if loading && previewCols.isEmpty {
+                // 只有「首次进入、还没有任何数据」时才整屏等待。
+                // 原来每次翻页 / 刷新都退回整屏「加载中…」，表格会整块闪掉再重画。
                 ProgressView("加载中…")
-            } else if let error = error {
-                ScrollView { Text(error).foregroundColor(.red).padding() }
+            } else if previewCols.isEmpty, let error = error {
+                // 一条都没取到又出错：给明确原因 + 重试
+                VStack(spacing: 14) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.largeTitle).foregroundColor(.orange)
+                    Text(error).font(.footnote)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Button("重试") { Task { await load() } }
+                        .buttonStyle(.borderedProminent)
+                }
+                .padding()
             } else {
                 VStack(spacing: 0) {
+                    // 刷新中：顶部细进度条，旧内容留在原地
+                    if loading { ProgressView().progressViewStyle(.linear) }
+                    // 刷新失败但已有数据：只在顶部提示，不清空表格
+                    if let error = error {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.circle.fill").font(.caption2)
+                            Text("刷新失败：\(error)").font(.caption2).lineLimit(2)
+                            Spacer(minLength: 6)
+                            Button("重试") { Task { await load() } }.font(.caption2)
+                        }
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                    }
                     HStack {
                         if let n = rowCount {
                             Text("共 \(n) 条 · 第 \(page)/\(maxPage) 页")
@@ -1185,15 +1267,21 @@ struct TableDataView: View {
         // 之前只裁了「总数 / 页数」，没有裁 fetch 的 limit —— 免费用户把每页设成 500 时一次就能取回 500 行。
         let fetchLimit = max(0, min(pageSize, limit - offset))
 
-        async let cols = withReconnect(connection) { try await connection.listColumns(db: db, table: table) }
-        let c = try await cols
-        async let prev = withReconnect(connection) { try await connection.fetchRows(db: db, table: table, limit: fetchLimit, offset: offset,
-                                                 whereClause: activeWhere, orderBy: activeOrderBy) }
-        let p = try await prev
+        // 表结构只在还没拿到时查一次：翻页 / 刷新没必要重复 `SHOW FULL COLUMNS`
+        // （一次「应用筛选」原本会多打两条结构查询）。
+        if columns.isEmpty {
+            let c = try await withReconnect(connection) {
+                try await connection.listColumns(db: db, table: table)
+            }
+            await MainActor.run { self.columns = c }
+        }
+        let p = try await withReconnect(connection) {
+            try await connection.fetchRows(db: db, table: table, limit: fetchLimit, offset: offset,
+                                           whereClause: activeWhere, orderBy: activeOrderBy)
+        }
         var pc = [ColumnDef](); var pr = [[String?]]()
         if case .result(let cc, let rr) = p { pc = cc; pr = rr }
         await MainActor.run {
-            self.columns = c
             self.previewCols = pc
             self.previewRows = pr
             self.rawCount = raw

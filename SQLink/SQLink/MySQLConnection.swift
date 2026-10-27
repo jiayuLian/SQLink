@@ -12,11 +12,22 @@ final class MySQLConnection {
     private let queue = DispatchQueue(label: "com.jiayu.sqlink.mysql")
     private var sequence: UInt8 = 0
     private var isTLS = false
-    private let maxRows = 2000
+    /// 单次查询最多取回的行数（超出部分仍读完丢弃，避免协议错位）。
+    static let maxRowLimit = 2000
+    private let maxRows = MySQLConnection.maxRowLimit
 
     /// 底层 socket 句柄：回前台探活时要用它临时调 SO_RCVTIMEO。
     /// 流的 ShouldCloseNativeSocket = true，关闭由流负责，这里只记录不重复 close。
     private var socketFD: Int32 = -1
+
+    /// 重连合流：同一条连接上的多个查询可能同时发现 socket 已死
+    /// （页面里 `async let` 并发取结构 + 取数据、探活与用户操作相撞等）。
+    /// 之前它们会各自 `close()` 再握手一次 —— 后一个 `close()` 会把前一个
+    /// 正在握手的 socket 直接关掉，表现为「点进表偶尔报读取数据失败」。
+    /// 这里让并发的重连只做一次，其余调用者等同一个结果。
+    private let reconnectLock = NSLock()
+    private var reconnectTask: Task<Void, Error>?
+    private var reconnectID = 0
 
     init(profile: ConnectionProfile) {
         self.profile = profile
@@ -40,11 +51,41 @@ final class MySQLConnection {
     }
 
     /// 连接断开后重建连接（密码从 Keychain 取回）。用于查询时检测到死连接后的自动重连。
+    /// 并发调用会合流到同一次握手（见 reconnectLock 注释）。
     func reconnect() async throws {
-        close()
-        sequence = 0
+        if let inflight = syncReconnectState({ reconnectTask }) {
+            try await inflight.value
+            return
+        }
+        let (myID, task): (Int, Task<Void, Error>) = syncReconnectState {
+            reconnectID &+= 1
+            let id = reconnectID
+            let t = Task { [self] in try await self.performReconnect() }
+            reconnectTask = t
+            return (id, t)
+        }
+        defer {
+            syncReconnectState { if reconnectID == myID { reconnectTask = nil } }
+        }
+        try await task.value
+    }
+
+    /// 锁只在这层同步函数里用（`NSLock.lock()` 不能直接在 async 上下文调用）。
+    private func syncReconnectState<T>(_ body: () -> T) -> T {
+        reconnectLock.lock()
+        defer { reconnectLock.unlock() }
+        return body()
+    }
+
+    /// 真正的关闭 + 重新握手。全部放进串行队列里做：
+    /// 既保证不会打断别人正在跑的查询，也避免两个线程同时 close 同一个 socket。
+    private func performReconnect() async throws {
         let pw = KeychainHelper.load(for: profile.id) ?? ""
-        try await run { try self._connect(password: pw) }
+        try await run { () -> Void in
+            self.close()
+            self.sequence = 0
+            try self._connect(password: pw)
+        }
     }
 
     func query(_ sql: String) async throws -> QueryResult {

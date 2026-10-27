@@ -145,7 +145,7 @@ struct ResultGridView: View {
     @ViewBuilder
     private func resultCell(ri: Int, ci: Int, value: String?, width: CGFloat) -> some View {
         let isPK = pkIndex.map { $0 == ci } ?? false
-        let display = value == nil ? "NULL" : (value! ?? "")
+        let display = value ?? "NULL"
         let text = Text(display)
             .font(.system(size: 12 * scale, design: .monospaced))
             .foregroundColor(value == nil ? .secondary : .primary)

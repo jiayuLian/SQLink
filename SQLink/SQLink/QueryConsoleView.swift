@@ -26,6 +26,10 @@ struct QueryConsoleView: View {
     @State private var detectedTable: String = ""   // 从 SQL 文本自动解析出的表
     @State private var contextColumns: [ColumnInfo] = []
     @State private var columnCache: [String: [ColumnInfo]] = [:]  // 各表字段缓存（多表 JOIN 补全用）
+    /// 已经尝试过加载字段的表（含加载失败的）。
+    /// 没有这个集合时，某张表查不到字段会让补全在每次 body 重算时都重新发一次
+    /// `SHOW FULL COLUMNS`（每敲一个字符一条 SQL）。
+    @State private var attemptedColumnTables: Set<String> = []
 
     // query history
     @State private var showHistory = false
@@ -212,13 +216,17 @@ struct QueryConsoleView: View {
         if let c = columnCache[t], !c.isEmpty {
             return c.map { $0.field }
         }
-        Task { await loadColumnsForTable(t) }
+        // 每张表只尝试一次（失败也不重试），避免每次重算 body 都发一次查询
+        if !t.isEmpty, !attemptedColumnTables.contains(t) {
+            Task { await loadColumnsForTable(t) }
+        }
         return (t == activeContextTable) ? contextColumns.map { $0.field } : (columnCache[t]?.map { $0.field } ?? [])
     }
 
     @MainActor private func loadColumnsForTable(_ table: String) async {
         let t = table.components(separatedBy: ".").last ?? table
-        guard let db = db else { return }
+        guard let db = db, !t.isEmpty, !attemptedColumnTables.contains(t) else { return }
+        attemptedColumnTables.insert(t)
         do {
             let cols = try await withReconnect(connection) { try await connection.listColumns(db: db, table: t) }
             await MainActor.run { self.columnCache[t] = cols }
@@ -644,9 +652,17 @@ struct QueryConsoleView: View {
                 case .result(let c, let rw): lastCols = c; lastRows = rw
                 }
             }
-            let msg = okCount > 0 && lastCols.isEmpty
-                ? "执行成功（\(stmts.count) 条语句）"
-                : "返回 \(lastRows.count) 行"
+            // 单次查询有行数上限（超出部分读取后丢弃，避免内存爆掉）：
+            // 到顶时明确说明「已截断」，不让人误以为表里只有这些行。
+            let truncated = lastRows.count >= MySQLConnection.maxRowLimit
+            let msg: String
+            if okCount > 0 && lastCols.isEmpty {
+                msg = "执行成功（\(stmts.count) 条语句）"
+            } else if truncated {
+                msg = "返回 \(lastRows.count) 行（已达单次上限，仅显示前 \(MySQLConnection.maxRowLimit) 行，完整数据请用导出）"
+            } else {
+                msg = "返回 \(lastRows.count) 行"
+            }
             await MainActor.run {
                 self.columns = lastCols
                 self.rows = lastRows
@@ -739,7 +755,9 @@ struct QueryConsoleView: View {
     }
 
     private func quoteVal(_ v: String) -> String {
-        "'" + v.replacingOccurrences(of: "'", with: "''") + "'"
+        // 与表数据页编辑共用同一套转义（单引号 `''` + 反斜杠转义），
+        // 否则值里的字面 `\n` 会被 MySQL 当转义序列改写。
+        sqlLiteral(v)
     }
 
     /// 检测当前查询结果是否来自「单表简单 SELECT」，以便开启内联编辑。
@@ -784,7 +802,10 @@ struct QueryConsoleView: View {
         do {
             let cols = try await withReconnect(connection) { try await connection.listColumns(db: useDB, table: tableName) }
             guard !cols.isEmpty else { await MainActor.run { canEdit = false }; return }
-            let pk = cols.first { $0.key == "PRI" }?.field ?? cols.first { $0.key == "UNI" }?.field
+            let priCols = cols.filter { $0.key == "PRI" }.map { $0.field }
+            // 复合主键不能只按其中一列定位（UPDATE ... WHERE pk1 = x LIMIT 1 会误改别的行）
+            guard priCols.count <= 1 else { await MainActor.run { canEdit = false }; return }
+            let pk = priCols.first ?? cols.first { $0.key == "UNI" }?.field
             guard let pk = pk else { await MainActor.run { canEdit = false }; return }
             let fieldSet = Set(cols.map { $0.field.lowercased() })
             let resultNames = columns.map { $0.name.lowercased() }

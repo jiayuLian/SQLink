@@ -288,10 +288,11 @@ struct ProfileView: View {
         let email = settings.authEmail
         let pwd = deletePassword
         do {
-            // 重新登录校验密码（仅用于确认身份，不更新本地登录态）
-            _ = try await AuthService.shared.login(baseURL: settings.apiBaseURL, email: email, password: pwd)
-            // 密码正确，执行注销
-            try await AuthService.shared.deleteAccount(baseURL: settings.apiBaseURL, token: settings.authToken)
+            // 重新登录校验密码（仅用于确认身份；不要用它的响应去更新本地登录态）。
+            let auth = try await AuthService.shared.login(baseURL: settings.apiBaseURL, email: email, password: pwd)
+            // 重新登录可能已轮换 token（旧 token 被服务端吊销），注销必须用刚拿到的这一个，
+            // 否则会「密码明明正确，却提示服务端返回异常」。
+            try await AuthService.shared.deleteAccount(baseURL: settings.apiBaseURL, token: auth.token)
             await MainActor.run {
                 reauthing = false
                 showDeletePassword = false
