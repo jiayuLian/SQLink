@@ -12,7 +12,6 @@ struct DatabaseBrowserView: View {
     @State private var selectedDB: String? = nil
     /// 正在建立的连接：取消时直接关掉，避免 socket 挂着等超时。
     @State private var connectingConn: MySQLConnection?
-    @Environment(\.dismiss) private var dismiss
 
     /// 有缓存会话时直接用它的数据当初始值，避免重建视图时先闪一帧「正在连接」。
     init(profile: ConnectionProfile) {
@@ -37,41 +36,51 @@ struct DatabaseBrowserView: View {
                     Text(error).multilineTextAlignment(.center).padding(.horizontal)
                     Button("重试") { Task { await connect() } }
                         .buttonStyle(.borderedProminent)
-                }.padding()
+                }
+                .padding()
+                .navigationTitle(profile.name)
+                .navigationBarTitleDisplayMode(.inline)
             } else if let conn = connection {
                 if let db = selectedDB {
                     TableListView(profile: profile, db: db, connection: conn, onSwitchDB: { selectedDB = nil })
                 } else {
-                    // 搜索框常驻 + 卡片自绘（原因见 Components.swift 的 CardListMetrics 注释）
-                    SearchableCardList(search: $search, placeholder: "搜索数据库",
-                                       isEmpty: filtered.isEmpty, emptyText: "没有匹配的数据库") {
-                        ForEach(filtered.indices, id: \.self) { i in
-                            CardRow(title: filtered[i],
-                                    destination: TableListView(profile: profile, db: filtered[i], connection: conn))
-                            if i != filtered.count - 1 { CardRowDivider() }
-                        }
-                    }
-                    .navigationTitle(profile.name)
-                    .navigationBarTitleDisplayMode(.inline)
+                    databaseList(conn: conn)
                 }
             } else {
-                // 只有「本次真的需要新建连接」时才出现；已连上的会话会直接复用，不再闪这个界面。
-                // 主机不可达时 connect 有 5 秒超时，期间可取消。
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("正在连接 \(profile.host):\(profile.port)")
-                        .font(.footnote).foregroundColor(.secondary)
-                    Button("取消") {
-                        connectingConn?.close()
-                        dismiss()
+                // 首次建连不再出「正在连接 IP:端口 / 取消」的整屏页：
+                // 直接把库列表的容器铺出来（搜索框 + 空列表），连上后就地填充，
+                // 只在顶部留一条 2pt 的细进度条，视觉上和「列表正在加载」一样。
+                SearchableCardList(search: $search, placeholder: "搜索数据库",
+                                   isEmpty: true, emptyText: " ") { EmptyView() }
+                    .navigationTitle(profile.name)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .overlay(alignment: .top) {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                            .allowsHitTesting(false)
                     }
-                    .font(.footnote)
-                }
-                .padding()
             }
         }
         .task { await prepare() }
         .onAppear { UserDefaults.standard.set(profile.id.uuidString, forKey: "lastConnectionID") }
+        .onDisappear {
+            // 建连还没完成就退回上一级：别把 socket 挂着等超时
+            if connection == nil { connectingConn?.close() }
+        }
+    }
+
+    /// 库列表本体：搜索框常驻 + 卡片自绘（原因见 Components.swift 的 CardListMetrics 注释）
+    private func databaseList(conn: MySQLConnection) -> some View {
+        SearchableCardList(search: $search, placeholder: "搜索数据库",
+                           isEmpty: filtered.isEmpty, emptyText: "没有匹配的数据库") {
+            ForEach(filtered.indices, id: \.self) { i in
+                CardRow(title: filtered[i],
+                        destination: TableListView(profile: profile, db: filtered[i], connection: conn))
+                if i != filtered.count - 1 { CardRowDivider() }
+            }
+        }
+        .navigationTitle(profile.name)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     /// 有可复用会话就立刻出界面（后台静默刷新库列表），否则才真正建连。
@@ -140,20 +149,29 @@ struct TableListView: View {
 
     var body: some View {
         Group {
-            // 刷新时保留已有列表，避免每次返回都先闪一屏空白转圈
-            if loading && tables.isEmpty {
-                ProgressView()
-            } else if let error = error {
+            if let error = error {
                 Text(error).foregroundColor(.red).padding()
+                    .navigationTitle(db)
+                    .navigationBarTitleDisplayMode(.inline)
             } else {
-                // 表用 table 图标、视图用 eye 图标；行高与内边距由 CardRow 统一控制
+                // 首次加载同样不出整屏转圈：直接给空列表 + 顶部细进度条，
+                // 有缓存（返回上一级）时列表立刻就在，看起来是原地不动。
                 SearchableCardList(search: $search, placeholder: "搜索表",
-                                   isEmpty: filtered.isEmpty, emptyText: "没有匹配的表") {
+                                   isEmpty: filtered.isEmpty,
+                                   emptyText: loading && tables.isEmpty ? " " : "没有匹配的表") {
+                    // 表用 table 图标、视图用 eye 图标；行高与内边距由 CardRow 统一控制
                     ForEach(filtered.indices, id: \.self) { i in
                         let t = filtered[i]
                         CardRow(icon: t.type == "VIEW" ? "eye" : "table", title: t.name,
                                 destination: TableDetailView(connection: connection, db: db, table: t.name))
                         if i != filtered.count - 1 { CardRowDivider() }
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if loading && tables.isEmpty {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                            .allowsHitTesting(false)
                     }
                 }
                 .navigationTitle(db)
