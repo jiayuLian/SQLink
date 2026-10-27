@@ -1091,10 +1091,14 @@ struct TableDataView: View {
                     }
 
                     // 分页控件
+                    // 字号跟随表格缩放（夹在 0.85~1.2）：缩小到 90% / 75% 时底栏字一起收，
+                    // 且所有文案强制单行 —— 否则「上一页 / 下一页」会被挤成「上一\n页」。
                     Divider()
-                    HStack(spacing: 12) {
-                        Button { if page > 1 { page -= 1 } } label: { Label("上一页", systemImage: "chevron.left") }
-                            .disabled(page <= 1 || loading || editMode)
+                    HStack(spacing: 8) {
+                        Button { if page > 1 { page -= 1 } } label: {
+                            barLabel("上一页", icon: "chevron.left")
+                        }
+                        .disabled(page <= 1 || loading || editMode)
                         // 页码可点 → 输入页码 / 首页 / 末页
                         Button {
                             jumpText = "\(page)"
@@ -1102,33 +1106,37 @@ struct TableDataView: View {
                         } label: {
                             HStack(spacing: 2) {
                                 Text("\(page) / \(maxPage)")
-                                Image(systemName: "chevron.down").font(.system(size: 8))
+                                    .font(.system(size: 12.5 * barScale))
+                                    .lineLimit(1)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 8 * barScale))
                             }
-                            .font(.caption)
+                            .minimumScaleFactor(0.75)
                         }
                         .disabled(loading || editMode)
-                        Button { if page < maxPage { page += 1 } } label: { Label("下一页", systemImage: "chevron.right") }
-                            .disabled(page >= maxPage || loading || editMode)
-                        Spacer()
+                        Button { if page < maxPage { page += 1 } } label: {
+                            barLabel("下一页", icon: "chevron.right")
+                        }
+                        .disabled(page >= maxPage || loading || editMode)
+                        Spacer(minLength: 4)
                         if editMode {
                             // 编辑期间必须锁定翻页/改每页条数/改筛选，否则新页数据会与旧编辑值错位写库。
-                            Text("编辑中已锁定翻页").font(.caption2).foregroundColor(.orange)
+                            Text("编辑中已锁定翻页")
+                                .font(.system(size: 10.5 * barScale))
+                                .foregroundColor(.orange)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
                         }
                         Menu { ForEach(pageSizeOptions, id: \.self) { s in
                             Button("\(s) 条/页") { settings.pageSize = s; page = 1 }
                         } } label: {
-                            Label("\(effectivePageSize) 条/页", systemImage: "line.3.horizontal")
-                                .font(.caption)
+                            barLabel("\(effectivePageSize) 条/页", icon: "line.3.horizontal")
                         }
                         .disabled(editMode)
-                        if gridScale != 1 {
-                            Button { gridScale = 1 } label: {
-                                Label("\(Int(gridScale * 100))%", systemImage: "arrow.counterclockwise")
-                                    .font(.caption)
-                            }
-                        }
+                        // 缩放复位不放在底栏了：右下角悬浮控件的百分比点一下就复位 100%（也有双击表格），
+                        // 这里再放一个会把宽度挤爆 —— 正是「上一页」被折成两行的元凶。
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .padding(.horizontal, 8).padding(.vertical, 7)
                     .background(Color.gray.opacity(0.04))
                 }
                 // 导出进度遮罩：仅导出中显示，需要拦住底层点击，故继续用 overlay（短时、无交互按钮）
@@ -1176,6 +1184,26 @@ struct TableDataView: View {
     }
     private var maxPage: Int {
         max(1, Int(ceil(Double(rowCount ?? 0) / Double(effectivePageSize))))
+    }
+
+    /// 底栏字号缩放系数：跟随表格缩放，但夹在 0.85~1.2，
+    /// 保证 50% 时仍看得清、300% 时底栏也不会撑爆。
+    private var barScale: CGFloat {
+        min(max(gridScale, 0.85), 1.2)
+    }
+
+    /// 底栏「图标 + 文字」统一构件：强制单行 + 允许小幅压缩，
+    /// 宽度再紧也不会折成两行（缩放按钮出现时最容易触发）。
+    private func barLabel(_ text: String, icon: String, iconSize: CGFloat = 11) -> some View {
+        HStack(spacing: 3 * barScale) {
+            Image(systemName: icon)
+                .font(.system(size: iconSize * barScale, weight: .semibold))
+            Text(text)
+                .font(.system(size: 12.5 * barScale))
+                .lineLimit(1)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
     }
     private var isViewLimited: Bool {
         !settings.isPro && rawCount > settings.plan.freeViewLimit
