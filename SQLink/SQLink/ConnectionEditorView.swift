@@ -20,6 +20,11 @@ struct ConnectionEditorView: View {
         !store.profiles.contains(where: { $0.id == target.id })
     }
 
+    /// 提示文案里带「成功」即视为通过（沿用原判断，避免再加一个状态位）。
+    private var testOK: Bool {
+        testMessage?.contains("成功") ?? false
+    }
+
     init(target: ConnectionProfile) {
         self.target = target
         _name = State(initialValue: target.name)
@@ -33,33 +38,55 @@ struct ConnectionEditorView: View {
 
     var body: some View {
         NavigationView {
-            Form {
-                Section("基本信息") {
-                    TextField("连接名称（可选）", text: $name)
-                    TextField("主机 / IP", text: $host)
-                        .textInputAutocapitalization(.never)
-                    TextField("端口", text: $port)
-                        .keyboardType(.numberPad)
-                    TextField("用户名", text: $user)
-                        .textInputAutocapitalization(.never)
-                    HStack {
-                        PasswordField(text: $password, placeholder: "密码", showPassword: $showPwd)
-                        Button { showPwd.toggle() } label: {
-                            Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
+            VStack(spacing: 0) {
+                // 测试结果固定在表单上方：点「测试」时用户往往正滚在页面中间或底部，
+                // 结果放 Form 末尾（原来的写法）根本看不见，只能一路滑到底。
+                if let msg = testMessage {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: testOK ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(testOK ? .green : .red)
+                        Text(msg)
+                            .font(.footnote)
+                            .foregroundColor(testOK ? .green : .red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button {
+                            testMessage = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13))
                                 .foregroundColor(.secondary)
                         }
                     }
-                    TextField("默认数据库（可选）", text: $database)
-                        .textInputAutocapitalization(.never)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background((testOK ? Color.green : Color.red).opacity(0.12))
                 }
-                Section("安全") {
-                    Toggle("使用 SSL 连接", isOn: $useTLS)
-                    Text("已启用加密传输，并自动信任自签名证书（适用于自建服务器）。关闭后将使用明文连接。")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                }
-                if let msg = testMessage {
-                    Section { Text(msg).font(.footnote).foregroundColor(msg.contains("成功") ? .green : .red) }
+                Form {
+                    Section("基本信息") {
+                        TextField("连接名称（可选）", text: $name)
+                        TextField("主机 / IP", text: $host)
+                            .textInputAutocapitalization(.never)
+                        TextField("端口", text: $port)
+                            .keyboardType(.numberPad)
+                        TextField("用户名", text: $user)
+                            .textInputAutocapitalization(.never)
+                        HStack {
+                            PasswordField(text: $password, placeholder: "密码", showPassword: $showPwd)
+                            Button { showPwd.toggle() } label: {
+                                Image(systemName: showPwd ? "eye.fill" : "eye.slash.fill")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        TextField("默认数据库（可选）", text: $database)
+                            .textInputAutocapitalization(.never)
+                    }
+                    Section("安全") {
+                        Toggle("使用 SSL 连接", isOn: $useTLS)
+                        Text("已启用加密传输，并自动信任自签名证书（适用于自建服务器）。关闭后将使用明文连接。")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .navigationTitle(isNew ? "新建连接" : "编辑连接")
