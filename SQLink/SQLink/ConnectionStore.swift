@@ -101,6 +101,17 @@ final class ConnectionPool {
         tableLists[tableKey(id, db)] = rows
     }
 
+    /// 回前台探活：把缓存里的每条连接都戳一下（3 秒短超时），
+    /// 已经断掉的静默重建。后台执行，不阻塞 UI，失败也不弹错。
+    func revalidateAll() {
+        lock.lock()
+        let all = Array(connections.values)
+        lock.unlock()
+        for c in all {
+            Task { await c.pingAndRepair() }
+        }
+    }
+
     /// 连接资料被修改/删除时调用：丢弃旧会话，下次进入重新握手。
     func remove(for id: UUID) {
         lock.lock()

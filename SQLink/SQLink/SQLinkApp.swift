@@ -27,6 +27,9 @@ struct SQLinkApp: App {
             // 锁屏 / 切后台后系统可能回收网络，此时戳一次后端即可感知 token 是否已失效。
             .onChange(of: scenePhase) { _ in
                 if scenePhase == .active {
+                    // 切后台 / 锁屏期间系统或服务器往往已回收 TCP 连接：
+                    // 立刻在后台探活并重建，用户回来点翻页就不会卡住。
+                    ConnectionPool.shared.revalidateAll()
                     Task { await handleResumeSessionCheck() }
                 }
             }

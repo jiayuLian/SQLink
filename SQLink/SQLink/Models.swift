@@ -24,10 +24,10 @@ enum MySQLError: Error, LocalizedError {
         }
     }
 
-    /// 连接已断开（socket 写失败 / 被服务器关闭），可尝试自动重连。
+    /// 连接已断开（socket 读/写失败、被服务器关闭、读超时），可尝试自动重连。
     var isDeadConnection: Bool {
         switch self {
-        case .writeError, .connectionClosed: return true
+        case .writeError, .connectionClosed, .readError: return true
         default: return false
         }
     }

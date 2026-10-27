@@ -14,6 +14,10 @@ final class MySQLConnection {
     private var isTLS = false
     private let maxRows = 2000
 
+    /// 底层 socket 句柄：回前台探活时要用它临时调 SO_RCVTIMEO。
+    /// 流的 ShouldCloseNativeSocket = true，关闭由流负责，这里只记录不重复 close。
+    private var socketFD: Int32 = -1
+
     init(profile: ConnectionProfile) {
         self.profile = profile
     }
@@ -45,6 +49,36 @@ final class MySQLConnection {
 
     func query(_ sql: String) async throws -> QueryResult {
         try await run { try self._query(sql) }
+    }
+
+    /// 回前台探活：用 3 秒短超时跑一次 `SELECT 1`，socket 已死就直接重建。
+    ///
+    /// 为什么需要它：切后台 / 锁屏后系统或服务器往往已经回收了 TCP 连接，但本地
+    /// socket 不一定知道。此时用户点翻页，读取要等满 30 秒的 SO_RCVTIMEO 才报错，
+    /// 表现就是「点了没反应」。回前台先把它修好，用户下一次操作直接可用。
+    ///
+    /// 整体在串行队列里执行，和用户查询互斥，临时改超时不会影响别的语句。
+    func pingAndRepair() async {
+        do {
+            try await run { () -> Void in
+                self.applySocketTimeout(seconds: 3)
+                defer { self.applySocketTimeout(seconds: 30) }
+                _ = try self._query("SELECT 1")
+            }
+        } catch {
+            // 探活失败：静默重建，失败也不弹错（用户下次操作会再走一遍）。
+            try? await reconnect()
+        }
+    }
+
+    /// 临时调整 socket 的读写超时（秒）。只在串行队列内调用。
+    private func applySocketTimeout(seconds: Int) {
+        guard socketFD >= 0 else { return }
+        var tv = timeval()
+        tv.tv_sec = seconds
+        tv.tv_usec = 0
+        setsockopt(socketFD, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(socketFD, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
     }
 
     func listDatabases() async throws -> [String] {
@@ -127,6 +161,7 @@ final class MySQLConnection {
         outputStream?.close()
         inputStream = nil
         outputStream = nil
+        socketFD = -1
     }
 
     private func esc(_ s: String) -> String {
@@ -153,6 +188,7 @@ final class MySQLConnection {
         output.open()
         inputStream = input
         outputStream = output
+        socketFD = fd
 
         isTLS = false
         let greeting = try readPacket()
