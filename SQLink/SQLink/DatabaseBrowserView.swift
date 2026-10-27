@@ -123,6 +123,17 @@ struct TableListView: View {
     @State private var error: String?
     @State private var search = ""
 
+    /// 命中缓存时先显示上次的表列表（返回上一级不再闪空白转圈），再静默刷新。
+    init(profile: ConnectionProfile, db: String, connection: MySQLConnection, onSwitchDB: (() -> Void)? = nil) {
+        self.profile = profile
+        self.db = db
+        self.connection = connection
+        self.onSwitchDB = onSwitchDB
+        let cached = ConnectionPool.shared.tables(for: profile.id, db: db)
+        _tables = State(initialValue: cached ?? [])
+        _loading = State(initialValue: cached == nil)
+    }
+
     private var filtered: [(name: String, type: String)] {
         search.isEmpty ? tables : tables.filter { $0.name.localizedCaseInsensitiveContains(search) }
     }
@@ -174,6 +185,7 @@ struct TableListView: View {
     func load() async {
         do {
             let t = try await withReconnect(connection) { try await connection.listTables(db: db) }
+            ConnectionPool.shared.setTables(t, for: profile.id, db: db)
             await MainActor.run { self.tables = t }
         } catch {
             let msg = error.localizedDescription

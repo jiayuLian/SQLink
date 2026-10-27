@@ -64,6 +64,7 @@ final class ConnectionPool {
 
     private var connections: [UUID: MySQLConnection] = [:]
     private var databaseLists: [UUID: [String]] = [:]
+    private var tableLists: [String: [(name: String, type: String)]] = [:]
     private let lock = NSLock()
 
     func connection(for id: UUID) -> MySQLConnection? {
@@ -87,11 +88,26 @@ final class ConnectionPool {
         databaseLists[id] = dbs
     }
 
+    /// 表列表缓存：返回上一级时先显示上次结果，再静默刷新，不会闪一屏空白。
+    private func tableKey(_ id: UUID, _ db: String) -> String { "\(id.uuidString)|\(db)" }
+
+    func tables(for id: UUID, db: String) -> [(name: String, type: String)]? {
+        lock.lock(); defer { lock.unlock() }
+        return tableLists[tableKey(id, db)]
+    }
+
+    func setTables(_ rows: [(name: String, type: String)], for id: UUID, db: String) {
+        lock.lock(); defer { lock.unlock() }
+        tableLists[tableKey(id, db)] = rows
+    }
+
     /// 连接资料被修改/删除时调用：丢弃旧会话，下次进入重新握手。
     func remove(for id: UUID) {
         lock.lock()
         let old = connections.removeValue(forKey: id)
         databaseLists[id] = nil
+        let prefix = id.uuidString + "|"
+        tableLists = tableLists.filter { !$0.key.hasPrefix(prefix) }
         lock.unlock()
         old?.close()
     }
