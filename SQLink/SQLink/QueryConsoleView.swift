@@ -383,7 +383,7 @@ struct QueryConsoleView: View {
                                     MagnificationGesture()
                                         .updating($gridMagnify) { value, state, _ in state = value }
                                         .onEnded { value in
-                                            gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                            gridScale = min(max(gridScale * value, 0.5), 3.0)
                                         }
                                 )
                                 .onTapGesture(count: 2) { gridScale = 1 }
@@ -401,7 +401,7 @@ struct QueryConsoleView: View {
                                     MagnificationGesture()
                                         .updating($gridMagnify) { value, state, _ in state = value }
                                         .onEnded { value in
-                                            gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                            gridScale = min(max(gridScale * value, 0.5), 3.0)
                                         }
                                 )
                                 .onTapGesture(count: 2) { gridScale = 1 }

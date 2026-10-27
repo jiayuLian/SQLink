@@ -51,70 +51,99 @@ struct ResultGridView: View {
         return columns.firstIndex { $0.name == pk }
     }
 
-    private let minColWidth: CGFloat = 80
-    private let maxColWidth: CGFloat = 160
+    /// 每列在 100% 时需要的宽度（表头 + 前 40 行内容里最宽的那个，夹在 56~220）。
+    /// 之前固定 80~160：`id`/`status`/`age` 这类短列也占 160，8 列宽表在手机上
+    /// 一屏只能看到 2 列多 —— 缩到 50% 也只是把浪费等比缩小。
+    private var baseColWidths: [CGFloat] {
+        columns.enumerated().map { ci, c in
+            var units = displayUnits((primaryKey == c.name ? "🔑 " : "") + c.name)
+            let sample = min(rows.count, 40)
+            for ri in 0..<max(sample, 0) {
+                let v = ci < rows[ri].count ? rows[ri][ci] : nil
+                units = max(units, displayUnits(v ?? "NULL"))
+            }
+            // 等宽 12pt 半角约 7.4pt；全角字符按 1.9 个单元估。
+            return min(max(units * 7.4 + 12, 56), 220)
+        }
+    }
+
+    /// 按显示宽度折算字符单元：CJK / emoji 占两格。
+    private func displayUnits(_ s: String) -> CGFloat {
+        var n: CGFloat = 0
+        for ch in s.unicodeScalars {
+            n += ch.value >= 0x2E80 ? 1.9 : 1
+        }
+        return n
+    }
 
     var body: some View {
         if columns.isEmpty {
             Text("无结果集").foregroundColor(.secondary).padding()
         } else {
-            // 外层只负责横向滚动：表头和数据行在同一个横向坐标系里，
-            // 左右滑动时列名与内容始终对齐。
-            ScrollView(.horizontal, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    // 表头固定在顶部，不参与纵向滚动。
-                    headerRow
-                    // 内层只负责纵向滚动：往下滑数据时字段名保持可见。
-                    ScrollView(.vertical, showsIndicators: true) {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(0..<rows.count, id: \.self) { ri in
-                                dataRow(ri: ri)
-                            }
-                        }
-                    }
-                    .frame(maxHeight: .infinity)
-                }
-            }
-            .frame(maxHeight: .infinity)
-            .sheet(item: $selectedCell) { cell in
-                CellValueSheet(column: columns[safe: cell.col]?.name ?? "", value: cell.value)
-            }
+            content(baseColWidths)
         }
     }
 
-    private var headerRow: some View {
+    private func content(_ widths: [CGFloat]) -> some View {
+        // 宽度只量一次，传给表头和数据行，避免每个单元格重复估算。
+        // 外层只负责横向滚动：表头和数据行在同一个横向坐标系里，
+        // 左右滑动时列名与内容始终对齐。
+        ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                // 表头固定在顶部，不参与纵向滚动。
+                headerRow(widths)
+                // 内层只负责纵向滚动：往下滑数据时字段名保持可见。
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(0..<rows.count, id: \.self) { ri in
+                            dataRow(ri: ri, widths: widths)
+                        }
+                    }
+                }
+                .frame(maxHeight: .infinity)
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .sheet(item: $selectedCell) { cell in
+            CellValueSheet(column: columns[safe: cell.col]?.name ?? "", value: cell.value)
+        }
+    }
+
+    private func headerRow(_ widths: [CGFloat]) -> some View {
         HStack(spacing: 0) {
-            ForEach(columns) { c in
-                headerCell(c)
+            ForEach(columns.indices, id: \.self) { ci in
+                headerCell(ci, width: widths[safe: ci] ?? 80)
             }
         }
     }
 
     @ViewBuilder
-    private func headerCell(_ c: ColumnDef) -> some View {
+    private func headerCell(_ ci: Int, width: CGFloat) -> some View {
+        let c = columns[ci]
         let isPK = primaryKey.map { c.name == $0 } ?? false
         let label = (isPK ? "🔑 " : "") + c.name
         Text(label)
             .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
             .lineLimit(1)
             .truncationMode(.tail)
-            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .frame(width: width * scale, alignment: .leading)
             .padding(6 * scale)
             .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
     }
 
-    private func dataRow(ri: Int) -> some View {
+    private func dataRow(ri: Int, widths: [CGFloat]) -> some View {
         let row = rows[ri]
         return HStack(spacing: 0) {
             ForEach(0..<columns.count, id: \.self) { ci in
                 // 用安全判断：结果行列数理论上与列定义一致，但列级权限/异常响应下可能偏少，避免越界崩溃
-                resultCell(ri: ri, ci: ci, value: ci < row.count ? row[ci] : nil)
+                resultCell(ri: ri, ci: ci, value: ci < row.count ? row[ci] : nil,
+                           width: widths[safe: ci] ?? 80)
             }
         }
     }
 
     @ViewBuilder
-    private func resultCell(ri: Int, ci: Int, value: String?) -> some View {
+    private func resultCell(ri: Int, ci: Int, value: String?, width: CGFloat) -> some View {
         let isPK = pkIndex.map { $0 == ci } ?? false
         let display = value == nil ? "NULL" : (value! ?? "")
         let text = Text(display)
@@ -125,7 +154,7 @@ struct ResultGridView: View {
         let background = isPK ? Color.accentColor.opacity(0.10) : ((ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear)
 
         text
-            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .frame(width: width * scale, alignment: .leading)
             .padding(6 * scale)
             .background(background)
             .contextMenu { resultCellMenu(value: value, row: ri, col: ci) }
@@ -152,17 +181,27 @@ struct ResultGridView: View {
 struct GridZoomControls: View {
     @Binding var scale: CGFloat
 
-    private let minScale: CGFloat = 0.6
+    private let minScale: CGFloat = 0.5
     private let maxScale: CGFloat = 3.0
-    private let step: CGFloat = 0.2
+
+    /// 预设档位：缩得越小步长越小，保证每一下都有明显变化，且 100% 一定命中。
+    /// （固定 0.2 步进在 0.5 下界会走出 50%→70%→90%→110%，永远点不到 100%。）
+    private let stops: [CGFloat] = [0.5, 0.6, 0.75, 0.9, 1.0, 1.2, 1.4, 1.7, 2.0, 2.4, 2.8, 3.0]
 
     private var canZoomIn: Bool { scale < maxScale - 0.001 }
     private var canZoomOut: Bool { scale > minScale + 0.001 }
 
+    private func nextStop(zoomIn: Bool) -> CGFloat {
+        if zoomIn {
+            return stops.first { $0 > scale + 0.001 } ?? maxScale
+        }
+        return stops.last { $0 < scale - 0.001 } ?? minScale
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             zoomButton(systemName: "plus", enabled: canZoomIn) {
-                scale = min(max(scale + step, minScale), maxScale)
+                scale = min(max(nextStop(zoomIn: true), minScale), maxScale)
             }
 
             Text("\(Int((scale * 100).rounded()))%")
@@ -173,7 +212,7 @@ struct GridZoomControls: View {
                 .onTapGesture { scale = 1.0 }
 
             zoomButton(systemName: "minus", enabled: canZoomOut) {
-                scale = min(max(scale - step, minScale), maxScale)
+                scale = min(max(nextStop(zoomIn: false), minScale), maxScale)
             }
         }
         .frame(width: 40)
@@ -219,8 +258,27 @@ struct EditableGridView: View {
         return columns.firstIndex { $0.field == pk }
     }
 
-    private let minColWidth: CGFloat = 80
-    private let maxColWidth: CGFloat = 160
+    /// 与 ResultGridView 同款自适应列宽。编辑态用 originalRows 取值，
+    /// 避免用户一边打字一边把列宽撑开/缩回。
+    private var baseColWidths: [CGFloat] {
+        columns.enumerated().map { ci, c in
+            var units = displayUnits((primaryKey == c.field ? "🔑🔒 " : "") + c.field)
+            let sample = min(originalRows.count, 40)
+            for ri in 0..<max(sample, 0) {
+                let v = ci < originalRows[ri].count ? originalRows[ri][ci] : nil
+                units = max(units, displayUnits(v ?? "NULL"))
+            }
+            return min(max(units * 7.4 + 12, 56), 220)
+        }
+    }
+
+    private func displayUnits(_ s: String) -> CGFloat {
+        var n: CGFloat = 0
+        for ch in s.unicodeScalars {
+            n += ch.value >= 0x2E80 ? 1.9 : 1
+        }
+        return n
+    }
 
     private func binding(for ri: Int, _ ci: Int) -> Binding<String> {
         Binding(
@@ -243,14 +301,19 @@ struct EditableGridView: View {
     }
 
     var body: some View {
+        // 宽度只量一次（用 originalRows，不会因打字而抖动），再传给表头/数据行。
+        content(baseColWidths)
+    }
+
+    private func content(_ widths: [CGFloat]) -> some View {
         // 与 ResultGridView 相同：外层横向、内层纵向，表头固定不动。
         ScrollView(.horizontal, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                headerRow
+                headerRow(widths)
                 ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(0..<rows.count, id: \.self) { ri in
-                            dataRow(ri: ri)
+                            dataRow(ri: ri, widths: widths)
                         }
                     }
                 }
@@ -264,47 +327,47 @@ struct EditableGridView: View {
         }
     }
 
-    private var headerRow: some View {
+    private func headerRow(_ widths: [CGFloat]) -> some View {
         HStack(spacing: 0) {
             ForEach(0..<columns.count, id: \.self) { ci in
-                editableHeaderCell(ci)
+                editableHeaderCell(ci, width: widths[safe: ci] ?? 80)
             }
         }
     }
 
     @ViewBuilder
-    private func editableHeaderCell(_ ci: Int) -> some View {
+    private func editableHeaderCell(_ ci: Int, width: CGFloat) -> some View {
         let isPK = pkIndex.map { $0 == ci } ?? false
         let label = (isPK ? "🔑🔒 " : "") + columns[ci].field
         Text(label)
             .font(.system(size: 13 * scale, weight: .bold, design: .monospaced))
             .lineLimit(1)
             .truncationMode(.tail)
-            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .frame(width: width * scale, alignment: .leading)
             .padding(6 * scale)
             .background(isPK ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.18))
     }
 
-    private func dataRow(ri: Int) -> some View {
+    private func dataRow(ri: Int, widths: [CGFloat]) -> some View {
         HStack(spacing: 0) {
             ForEach(0..<columns.count, id: \.self) { ci in
-                editableCell(ri: ri, ci: ci)
+                editableCell(ri: ri, ci: ci, width: widths[safe: ci] ?? 80)
             }
         }
     }
 
     @ViewBuilder
-    private func editableCell(ri: Int, ci: Int) -> some View {
+    private func editableCell(ri: Int, ci: Int, width: CGFloat) -> some View {
         let isPK = pkIndex.map { $0 == ci } ?? false
         if isPK {
-            pkCell(ri: ri, ci: ci)
+            pkCell(ri: ri, ci: ci, width: width)
         } else {
-            valueCell(ri: ri, ci: ci)
+            valueCell(ri: ri, ci: ci, width: width)
         }
     }
 
     @ViewBuilder
-    private func pkCell(ri: Int, ci: Int) -> some View {
+    private func pkCell(ri: Int, ci: Int, width: CGFloat) -> some View {
         let cell: String? = ci < rows[ri].count ? rows[ri][ci] : nil
         let text = cell ?? "NULL"
         Text(text)
@@ -312,13 +375,13 @@ struct EditableGridView: View {
             .foregroundColor(.secondary)
             .lineLimit(1)
             .truncationMode(.tail)
-            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .frame(width: width * scale, alignment: .leading)
             .padding(6 * scale)
             .background(Color.accentColor.opacity(0.10))
     }
 
     @ViewBuilder
-    private func valueCell(ri: Int, ci: Int) -> some View {
+    private func valueCell(ri: Int, ci: Int, width: CGFloat) -> some View {
         let background = (ri + ci) % 2 == 0 ? Color.gray.opacity(0.04) : Color.clear
         let cell: String? = ci < rows[ri].count ? rows[ri][ci] : nil
         TextField(cell == nil ? "NULL" : "",
@@ -326,7 +389,7 @@ struct EditableGridView: View {
             .font(.system(size: 12 * scale, design: .monospaced))
             .foregroundColor(cell == nil ? .secondary : .primary)
             .lineLimit(1)
-            .frame(minWidth: minColWidth * scale, maxWidth: maxColWidth * scale, alignment: .leading)
+            .frame(width: width * scale, alignment: .leading)
             .padding(6 * scale)
             .background(background)
             .contextMenu {

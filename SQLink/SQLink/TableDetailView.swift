@@ -714,6 +714,14 @@ struct TableDataView: View {
     @State private var error: String?
     @State private var page = 1
 
+    // 页码跳转（长表不必点几十次「下一页」）
+    @State private var showJumpSheet = false
+    @State private var jumpText = ""
+
+    // 点「编辑」但不满足条件时，把原因讲清楚（按钮不再凭空消失）
+    @State private var editBlockMessage: String?
+    @State private var showEditBlocked = false
+
     // 导出进度（引用类型，便于后台 Task 安全更新 UI）
     @StateObject private var exportState = ExportProgressModel()
 
@@ -742,6 +750,16 @@ struct TableDataView: View {
         !(activeWhere?.isEmpty ?? true) || !(activeOrderBy?.isEmpty ?? true)
     }
 
+    /// 为什么不能编辑（nil = 可以编辑）。顺序按用户最容易撞上的来。
+    private var editBlockReason: String? {
+        if !settings.isPro { return "数据编辑为会员功能，升级后可修改数据" }
+        if loading { return "数据还在加载，请稍候" }
+        if error != nil { return "当前数据加载失败，无法编辑" }
+        if !hasFilterCondition { return "为避免误改整张表，请先用「筛选&排序」设置条件并应用" }
+        if primaryKey == nil { return "结果集里没有主键/唯一键列，无法定位要更新的行" }
+        return nil
+    }
+
     var body: some View {
         mainContent
             .navigationTitle(table)
@@ -755,6 +773,44 @@ struct TableDataView: View {
             .onChange(of: settings.pageSize) { _ in Task { await load() } }
             .task { await load() }
             .sheet(isPresented: $showFilter) { filterSheet }
+            .sheet(isPresented: $showJumpSheet) { jumpSheet }
+            .alert("无法编辑", isPresented: $showEditBlocked) {
+                Button("知道了", role: .cancel) { }
+            } message: {
+                Text(editBlockMessage ?? "")
+            }
+    }
+
+    /// 跳页面板：输入页码 + 首页 / 末页。
+    private var jumpSheet: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("当前第 \(page) 页，共 \(maxPage) 页")) {
+                    TextField("页码（1 - \(maxPage)）", text: $jumpText)
+                        .keyboardType(.numberPad)
+                }
+                Section {
+                    Button("跳转") { jumpToTypedPage() }
+                    Button("首页") { page = 1; showJumpSheet = false }
+                    Button("末页") { page = maxPage; showJumpSheet = false }
+                }
+            }
+            .navigationTitle("跳转到页码")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { showJumpSheet = false }
+                }
+            }
+        }
+    }
+
+    private func jumpToTypedPage() {
+        let trimmed = jumpText.trimmingCharacters(in: .whitespaces)
+        if let v = Int(trimmed) {
+            page = min(max(1, v), maxPage)
+        }
+        showJumpSheet = false
     }
 
     private var mainContent: some View {
@@ -789,9 +845,9 @@ struct TableDataView: View {
                         .padding(.horizontal, 10).padding(.bottom, 4)
                     }
 
-                    // 免费版数据编辑提示：出现条件与会员的「编辑」按钮一致（已应用筛选 / 排序）。
-                    // 会员在这里看到的是「编辑」按钮，免费用户看到这行说明，避免「功能凭空消失」。
-                    if !settings.isPro && hasFilterCondition {
+                    // 免费版数据编辑提示：编辑按钮现在常显，点它也会说明是会员功能；
+                    // 这里保留一行常驻说明，避免用户反复点。
+                    if !settings.isPro {
                         HStack(spacing: 4) {
                             Image(systemName: "lock.fill").font(.caption2)
                             Text("数据编辑为会员功能，升级后可修改数据")
@@ -812,7 +868,7 @@ struct TableDataView: View {
                                 MagnificationGesture()
                                     .updating($gridMagnify) { value, state, _ in state = value }
                                     .onEnded { value in
-                                        gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                        gridScale = min(max(gridScale * value, 0.5), 3.0)
                                     }
                             )
                             .onTapGesture(count: 2) { gridScale = 1 }
@@ -830,7 +886,7 @@ struct TableDataView: View {
                                 MagnificationGesture()
                                     .updating($gridMagnify) { value, state, _ in state = value }
                                     .onEnded { value in
-                                        gridScale = min(max(gridScale * value, 0.6), 3.0)
+                                        gridScale = min(max(gridScale * value, 0.5), 3.0)
                                     }
                             )
                             .onTapGesture(count: 2) { gridScale = 1 }
@@ -856,7 +912,18 @@ struct TableDataView: View {
                     HStack(spacing: 12) {
                         Button { if page > 1 { page -= 1 } } label: { Label("上一页", systemImage: "chevron.left") }
                             .disabled(page <= 1 || loading || editMode)
-                        Text("\(page) / \(maxPage)").font(.caption)
+                        // 页码可点 → 输入页码 / 首页 / 末页
+                        Button {
+                            jumpText = "\(page)"
+                            showJumpSheet = true
+                        } label: {
+                            HStack(spacing: 2) {
+                                Text("\(page) / \(maxPage)")
+                                Image(systemName: "chevron.down").font(.system(size: 8))
+                            }
+                            .font(.caption)
+                        }
+                        .disabled(loading || editMode)
                         Button { if page < maxPage { page += 1 } } label: { Label("下一页", systemImage: "chevron.right") }
                             .disabled(page >= maxPage || loading || editMode)
                         Spacer()
@@ -959,8 +1026,19 @@ struct TableDataView: View {
         ToolbarItem(placement: .navigationBarTrailing) {
             if editMode {
                 Button("取消") { cancelEdit() }
-            } else if settings.isPro && hasFilterCondition {
-                Button { enterEdit() } label: { Label("编辑", systemImage: "square.and.pencil") }
+            } else {
+                // 编辑按钮常显：不满足条件时点一下说明原因，
+                // 而不是让按钮凭空消失（用户只会觉得「这页怎么不能编辑」）。
+                Button {
+                    if let reason = editBlockReason {
+                        editBlockMessage = reason
+                        showEditBlocked = true
+                    } else {
+                        enterEdit()
+                    }
+                } label: {
+                    Label("编辑", systemImage: "square.and.pencil")
+                }
             }
         }
         ToolbarItem(placement: .navigationBarTrailing) {

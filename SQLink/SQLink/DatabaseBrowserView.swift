@@ -10,6 +10,9 @@ struct DatabaseBrowserView: View {
     @State private var loading = true
     @State private var search = ""
     @State private var selectedDB: String? = nil
+    /// 正在建立的连接：取消时直接关掉，避免 socket 挂着等超时。
+    @State private var connectingConn: MySQLConnection?
+    @Environment(\.dismiss) private var dismiss
 
     private var filtered: [String] {
         search.isEmpty ? databases : databases.filter { $0.localizedCaseInsensitiveContains(search) }
@@ -26,7 +29,20 @@ struct DatabaseBrowserView: View {
                         .buttonStyle(.borderedProminent)
                 }.padding()
             } else if loading {
-                ProgressView("连接中…")
+                // 主机不可达时 connect 会等到超时（十几秒）。给一个取消出口，
+                // 不用干等，也不必杀进程。
+                VStack(spacing: 18) {
+                    ProgressView("正在连接 \(profile.host):\(profile.port)…")
+                        .multilineTextAlignment(.center)
+                    Text("主机不可达时最长等待十几秒")
+                        .font(.caption2).foregroundColor(.secondary)
+                    Button("取消") {
+                        connectingConn?.close()
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding()
             } else if let conn = connection {
                 if let db = selectedDB {
                     TableListView(profile: profile, db: db, connection: conn, onSwitchDB: { selectedDB = nil })
@@ -53,6 +69,7 @@ struct DatabaseBrowserView: View {
         loading = true; error = nil
         do {
             let conn = MySQLConnection(profile: profile)
+            connectingConn = conn
             try await conn.connect(password: store.password(for: profile))
             let dbs = try await conn.listDatabases()
             await MainActor.run {
