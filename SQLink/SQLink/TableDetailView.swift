@@ -250,50 +250,76 @@ struct TableDetailView: View {
     @State private var activeOrderBy: String? = nil
 
     var body: some View {
-        List {
-            Section("结构（\(columns.count) 列）") {
-                if columns.isEmpty {
-                    Text("加载中…").foregroundColor(.secondary)
-                }
-                ForEach(columns) { c in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(c.field).font(.system(size: 14, weight: .bold))
-                            Spacer()
-                            if !c.key.isEmpty && c.key != " " {
-                                Text(c.key).font(.caption).padding(.horizontal, 6)
-                                    .background(Color.accentColor.opacity(0.15))
-                                    .foregroundColor(.accentColor)
-                                    .cornerRadius(4)
+        ScrollView {
+            VStack(spacing: 12) {
+                // 结构卡片（对齐 Android 版：标题 + 列行 + 底部分隔线）
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("结构（\(columns.count) 列）")
+                        .font(.system(size: 15, weight: .bold))
+                        .padding(.horizontal, 16)
+                        .padding(.top, 14)
+                        .padding(.bottom, 6)
+                    if columns.isEmpty {
+                        Text("加载中…")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 12)
+                    }
+                    ForEach(columns) { c in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(c.field).font(.system(size: 14, weight: .bold))
+                                Spacer()
+                                if !c.key.isEmpty && c.key != " " {
+                                    Text(c.key).font(.caption).padding(.horizontal, 6)
+                                        .background(Color.accentColor.opacity(0.15))
+                                        .foregroundColor(.accentColor)
+                                        .cornerRadius(4)
+                                }
+                            }
+                            Text("\(c.type)  \(c.null == "NO" ? "NOT NULL" : "NULL")")
+                                .font(.caption).foregroundColor(.secondary)
+                            if !c.comment.isEmpty {
+                                Text("备注：\(c.comment)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                         }
-                        Text("\(c.type)  \(c.null == "NO" ? "NOT NULL" : "NULL")")
-                            .font(.caption).foregroundColor(.secondary)
-                        if !c.comment.isEmpty {
-                            Text("备注：\(c.comment)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                     }
+                    Divider().padding(.top, 4)
                 }
-                Button { showDDL = true } label: {
-                    Label("查看建表 SQL", systemImage: "doc.plaintext")
-                }
-            }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(UIColor.secondarySystemGroupedBackground))
+                .cornerRadius(12)
 
-            Section {
-                if activeWhere != nil || activeOrderBy != nil {
-                    HStack {
-                        Text(filterStatusSummary)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                        Spacer()
-                    }
+                // 筛选 / 排序摘要（仅在已应用时出现）
+                if !filterStatusSummary.isEmpty {
+                    Text(filterStatusSummary)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
+                        .cornerRadius(12)
                 }
-            }
 
-            Section {
+                // 三个入口：与 Android 版一致——各自独立卡片、图标 + 标题 + 右侧箭头，
+                // 不再把「查看建表 SQL」做成结构卡片里的蓝色文字按钮。
+                Button {
+                    showDDL = true
+                } label: {
+                    entryRow(icon: "doc.plaintext", title: "查看建表 SQL")
+                }
+                .buttonStyle(PlainButtonStyle())
+                .background(Color(UIColor.secondarySystemGroupedBackground))
+                .cornerRadius(12)
+
                 NavigationLink {
                     TableDataView(connection: connection, db: db, table: table,
                                   conditions: $filterConditions,
@@ -303,33 +329,28 @@ struct TableDetailView: View {
                                   activeWhere: $activeWhere,
                                   activeOrderBy: $activeOrderBy)
                 } label: {
-                    HStack {
-                        Label("查看数据", systemImage: "tablecells")
-                        Spacer()
-                        if let n = rowCount {
-                            Text("匹配 \(n) 条").font(.caption).foregroundColor(.secondary)
-                        } else {
-                            Text("加载中…").font(.caption).foregroundColor(.secondary)
-                        }
-                    }
+                    entryRow(icon: "tablecells", title: "查看数据",
+                             trailingText: rowCount.map { "匹配 \($0) 条" } ?? "加载中…")
                 }
-            }
+                .buttonStyle(PlainButtonStyle())
+                .background(Color(UIColor.secondarySystemGroupedBackground))
+                .cornerRadius(12)
 
-            Section {
                 NavigationLink {
                     QueryConsoleView(connection: connection, db: db, defaultTable: table)
                 } label: {
-                    HStack {
-                        Label("打开查询控制台", systemImage: "terminal")
-                        Spacer()
-                        if !settings.isPro {
-                            Label("会员", systemImage: "lock.fill")
-                                .font(.caption).foregroundColor(.orange)
-                        }
-                    }
+                    entryRow(icon: "terminal", title: "打开查询控制台",
+                             badge: settings.isPro ? nil : "会员")
                 }
+                .buttonStyle(PlainButtonStyle())
+                .background(Color(UIColor.secondarySystemGroupedBackground))
+                .cornerRadius(12)
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
         }
+        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle(table)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -419,6 +440,36 @@ struct TableDetailView: View {
     private var ddlDisplay: AttributedString {
         if ddlText.isEmpty { return AttributedString("（无建表语句）") }
         return highlightSQL(formatCreateTable(ddlText))
+    }
+
+    /// 表详情页入口行（对齐 Android 版 ListTile）：图标 + 标题 + 右侧说明/徽标 + 箭头。
+    private func entryRow(icon: String, title: String,
+                          trailingText: String? = nil,
+                          badge: String? = nil) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundColor(.primary)
+                .frame(width: 24, alignment: .center)
+            Text(title).font(.system(size: 16))
+            Spacer(minLength: 8)
+            if let badge = badge {
+                HStack(spacing: 3) {
+                    Image(systemName: "lock.fill").font(.system(size: 10))
+                    Text(badge).font(.system(size: 12))
+                }
+                .foregroundColor(.orange)
+            }
+            if let trailingText = trailingText {
+                Text(trailingText).font(.system(size: 14)).foregroundColor(.secondary)
+            }
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Color(UIColor.tertiaryLabel))
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 52)
+        .contentShape(Rectangle())
     }
 
     private var filterStatusSummary: String {
