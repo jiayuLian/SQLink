@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 
 // MARK: - SQL WHERE / ORDER helpers
 private func quoteLikeLiteral(_ s: String) -> String {
@@ -765,9 +766,12 @@ struct TableDataView: View {
     @State private var error: String?
     @State private var page = 1
 
-    // 页码跳转（长表不必点几十次「下一页」）
+    // 页码跳转（长表不必点几十次「下一页」）；用居中卡片弹窗，不再用整屏 sheet
     @State private var showJumpSheet = false
     @State private var jumpText = ""
+    // 键盘高度：弹窗要跟着键盘上移，否则小屏会被挡住
+    @State private var keyboardInset: CGFloat = 0
+    @FocusState private var jumpFocused: Bool
 
     // 点「编辑」但不满足条件时，把原因讲清楚（按钮不再凭空消失）
     @State private var editBlockMessage: String?
@@ -824,7 +828,19 @@ struct TableDataView: View {
             .onChange(of: settings.pageSize) { _ in Task { await load() } }
             .task { await load() }
             .sheet(isPresented: $showFilter) { filterSheet }
-            .sheet(isPresented: $showJumpSheet) { jumpSheet }
+            // 跳页用「居中卡片 + 遮罩」，与 Android 版一致；iOS 15 没有 presentationDetents，
+            // 系统 sheet 在 iPhone 上必然是接近满屏的卡片，用户反馈太占屏幕。
+            .overlay {
+                if showJumpSheet { jumpDialog }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+                let screenH = UIScreen.main.bounds.height
+                keyboardInset = max(0, screenH - frame.origin.y)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardInset = 0
+            }
             .alert("无法编辑", isPresented: $showEditBlocked) {
                 Button("知道了", role: .cancel) { }
             } message: {
@@ -832,28 +848,62 @@ struct TableDataView: View {
             }
     }
 
-    /// 跳页面板：输入页码 + 首页 / 末页。
-    private var jumpSheet: some View {
-        NavigationView {
-            Form {
-                Section(header: Text("当前第 \(page) 页，共 \(maxPage) 页")) {
-                    TextField("页码（1 - \(maxPage)）", text: $jumpText)
-                        .keyboardType(.numberPad)
-                }
-                Section {
+    /// 跳页弹窗：居中卡片（标题 + 页码输入框 + 首页 / 末页 / 跳转），
+    /// 背景半透明遮罩，点遮罩关闭；点击外部即等同「取消」。
+    private var jumpDialog: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+                .onTapGesture { closeJumpDialog() }
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text("跳转到页码")
+                    .font(.system(size: 17, weight: .semibold))
+
+                TextField("页码（1 - \(maxPage)）", text: $jumpText)
+                    .keyboardType(.numberPad)
+                    .font(.system(size: 16, design: .monospaced))
+                    .focused($jumpFocused)
+                    .onAppear {
+                        // 与 Android 一致：弹出即聚焦，直接敲数字
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { jumpFocused = true }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 9)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.55), lineWidth: 1)
+                    )
+
+                HStack(spacing: 20) {
+                    Button("首页") { applyJump(to: 1) }
+                    Button("末页") { applyJump(to: maxPage) }
+                    Spacer(minLength: 0)
                     Button("跳转") { jumpToTypedPage() }
-                    Button("首页") { page = 1; showJumpSheet = false }
-                    Button("末页") { page = maxPage; showJumpSheet = false }
                 }
+                .font(.system(size: 15))
             }
-            .navigationTitle("跳转到页码")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { showJumpSheet = false }
-                }
-            }
+            .padding(20)
+            .frame(maxWidth: 280)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: Color.black.opacity(0.18), radius: 18, x: 0, y: 6)
+            .padding(.horizontal, 30)
+            // 键盘弹出时把卡片往上顶，避免遮挡输入框与按钮
+            .offset(y: -min(keyboardInset, 320) / 2)
         }
+        .transition(.opacity)
+    }
+
+    private func applyJump(to target: Int) {
+        page = min(max(1, target), maxPage)
+        closeJumpDialog()
+    }
+
+    private func closeJumpDialog() {
+        showJumpSheet = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
     }
 
     private func jumpToTypedPage() {
@@ -861,7 +911,7 @@ struct TableDataView: View {
         if let v = Int(trimmed) {
             page = min(max(1, v), maxPage)
         }
-        showJumpSheet = false
+        closeJumpDialog()
     }
 
     private var mainContent: some View {
