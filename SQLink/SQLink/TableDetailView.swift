@@ -387,10 +387,13 @@ struct TableDetailView: View {
         .navigationTitle(table)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // 标题放 principal：长表名（kugou_accounts 这类）不会和右侧按钮叠在一起
+            ToolbarItem(placement: .principal) { NavBarTitle(text: table) }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button { showFilter = true } label: {
-                    Label("筛选&排序", systemImage: "line.3.horizontal.decrease.circle")
+                    Image(systemName: "line.3.horizontal.decrease.circle")
                 }
+                .accessibilityLabel("筛选&排序")
             }
         }
         // 筛选 / 排序任一变化都只触发一次加载（原来两个 onChange 各自 load 一遍，
@@ -1290,11 +1293,16 @@ struct TableDataView: View {
         // body 区域此前会被一层看不见的遮罩/手势层覆盖，导致筛选&排序/编辑失灵，
         // 而工具栏在独立的 navigationBar 层、始终可点（用户实测「导出」一直能用即证明）。
         // 因此将所有操作入口上移到工具栏，从根本规避 body 点击被吞的问题。
+        //
+        // 全部改成图标式：文字按钮（「筛选&排序」「编辑」「导出」）合计宽度超过导航栏剩余空间，
+        // 会把标题压住并且互相叠在一起（iOS 15 inline 标题是居中独立绘制的，不会自动让位）。
+        ToolbarItem(placement: .principal) { NavBarTitle(text: table) }
         ToolbarItem(placement: .navigationBarLeading) {
             Button { showFilter = true } label: {
-                Label("筛选&排序", systemImage: "line.3.horizontal.decrease.circle")
+                Image(systemName: "line.3.horizontal.decrease.circle")
             }
             .disabled(editMode)
+            .accessibilityLabel("筛选&排序")
         }
         ToolbarItem(placement: .navigationBarTrailing) {
             if editMode {
@@ -1310,19 +1318,24 @@ struct TableDataView: View {
                         enterEdit()
                     }
                 } label: {
-                    Label("编辑", systemImage: "square.and.pencil")
+                    Image(systemName: "square.and.pencil")
                 }
+                .accessibilityLabel("编辑")
             }
         }
         ToolbarItem(placement: .navigationBarTrailing) {
             if editMode {
-                Button { Task { await saveEdits() } } label: { Label("保存", systemImage: "checkmark") }
+                Button { Task { await saveEdits() } } label: { Image(systemName: "checkmark") }
                     .disabled(primaryKey == nil || !hasChanges)
+                    .accessibilityLabel("保存")
             } else {
                 Menu {
                     Button { exportAs(.csv) } label: { Label("导出 CSV", systemImage: "doc") }
                     Button { exportAs(.sql) } label: { Label("导出 SQL", systemImage: "swiftdata") }
-                } label: { Label("导出", systemImage: "square.and.arrow.up") }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .accessibilityLabel("导出")
             }
         }
     }

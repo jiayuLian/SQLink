@@ -175,8 +175,6 @@ struct TableListView: View {
                     .buttonStyle(.borderedProminent)
                 }
                 .padding()
-                .navigationTitle(db)
-                .navigationBarTitleDisplayMode(.inline)
             } else {
                 // 首次加载同样不出整屏转圈：直接给空列表 + 顶部细进度条，
                 // 有缓存（返回上一级）时列表立刻就在，看起来是原地不动。
@@ -200,27 +198,36 @@ struct TableListView: View {
                             .allowsHitTesting(false)
                     }
                 }
-                .navigationTitle(db)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        if let onSwitchDB = onSwitchDB {
-                            Button("切换库") { onSwitchDB() }
-                        }
+            }
+        }
+        // 导航项统一挂在根上（原来挂在 if 的 else 分支里）：
+        // 分支内的 toolbar 在 push 子页面时不会被正确替换，上一页的按钮会残留压住子页标题。
+        .navigationTitle(db)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) { NavBarTitle(text: db) }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if let onSwitchDB = onSwitchDB {
+                    Button { onSwitchDB() } label: {
+                        Image(systemName: "rectangle.on.rectangle")
                     }
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        NavigationLink {
-                            QueryConsoleView(connection: connection, db: db, defaultTable: nil)
-                        } label: {
-                            HStack(spacing: 4) {
-                                if !settings.isPro {
-                                    Image(systemName: "lock.fill").font(.caption2)
-                                }
-                                Text("查询")
-                            }
+                    .accessibilityLabel("切换库")
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                NavigationLink {
+                    QueryConsoleView(connection: connection, db: db, defaultTable: nil)
+                } label: {
+                    // 图标式按钮：文字按钮太宽，长标题（如 kugou_accounts）会被它压住
+                    HStack(spacing: 2) {
+                        Image(systemName: "terminal")
+                        if !settings.isPro {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 8, weight: .semibold))
                         }
                     }
                 }
+                .accessibilityLabel("查询")
             }
         }
         .task { await load() }

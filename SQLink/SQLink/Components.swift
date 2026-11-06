@@ -494,6 +494,22 @@ private struct EditTarget: Identifiable {
 //   卡片左右内缩 16pt、圆角 10pt、行高 49pt、行内左右内边距 16pt、
 //   图标槽宽 30pt（图标—文字间距 12pt）、分隔线左侧内缩 16pt。
 
+/// 导航栏标题：放在 `.principal` 位置，由系统按「左右按钮占剩下的宽度」来排。
+/// 直接依赖 `navigationTitle` 的 inline 标题时，标题是**居中绘制**的，
+/// 一旦左右按钮变宽（文字按钮 + 上一页残留项），标题就会和按钮叠在一起（用户实测压字且点不动）。
+struct NavBarTitle: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 17, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .minimumScaleFactor(0.75)
+            .allowsTightening(true)
+    }
+}
+
 /// 分组卡片的统一几何参数。改这里即可整体调整两个列表页的观感。
 enum CardListMetrics {
     /// 卡片距屏幕左右
