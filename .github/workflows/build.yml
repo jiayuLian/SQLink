@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    # macos-14 现在会被分配成 arm64 镜像（macos-14-arm64-us-default），该配置在当前账号下不可用，
+    # 任务会在启动 1 秒内被取消（annotation: configuration is not supported）。改用 macos-15。
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
